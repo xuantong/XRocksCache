@@ -44,9 +44,9 @@
 #include "status.h"
 #include "storage/redis_metadata.h"
 
-constexpr const char *kDefaultDir = "/tmp/kvrocks";
-constexpr const char *kDefaultBackupDir = "/tmp/kvrocks/backup";
-constexpr const char *kDefaultPidfile = "/tmp/kvrocks/kvrocks.pid";
+constexpr const char *kDefaultDir = "/tmp/xrockscache";
+constexpr const char *kDefaultBackupDir = "/tmp/xrockscache/backup";
+constexpr const char *kDefaultPidfile = "/tmp/xrockscache/xrockscache.pid";
 constexpr const char *kDefaultBindAddress = "127.0.0.1";
 
 constexpr const char *errBlobDbNotEnabled = "Must set rocksdb.enable_blob_files to yes first.";
@@ -59,9 +59,6 @@ const std::vector<ConfigEnum<SupervisedMode>> supervised_modes{
     {"upstart", kSupervisedUpStart},
     {"systemd", kSupervisedSystemd},
 };
-
-const std::vector<ConfigEnum<JsonStorageFormat>> json_storage_formats{{"json", JsonStorageFormat::JSON},
-                                                                      {"cbor", JsonStorageFormat::CBOR}};
 
 const std::vector<ConfigEnum<rocksdb::CompressionType>> compression_types{[] {
   std::vector<ConfigEnum<rocksdb::CompressionType>> res;
@@ -90,16 +87,6 @@ const std::vector<ConfigEnum<BlockCacheType>> cache_types{[] {
   return res;
 }()};
 
-const std::vector<ConfigEnum<HashSubkeyEncodingMode>> hash_subkey_encoding_modes{
-    {"legacy", HashSubkeyEncodingMode::kLegacy},
-    {"field-expiration", HashSubkeyEncodingMode::kFieldExpiration},
-};
-
-const std::vector<ConfigEnum<HashLengthMode>> hash_length_modes{
-    {"accurate", HashLengthMode::kAccurate},
-    {"approximate", HashLengthMode::kApproximate},
-};
-
 std::string TrimRocksDbPrefix(std::string s) {
   constexpr std::string_view prefix = "rocksdb.";
   if (!util::StartsWithICase(s, prefix)) return s;
@@ -120,16 +107,16 @@ Status SetRocksdbCompression(Server *srv, const rocksdb::CompressionType compres
     return {Status::NotOK, "Invalid compression type"};
   }
 
-  if (compression_start_level >= KVROCKS_MAX_LSM_LEVEL) {
-    return {Status::NotOK, "compression_start_level must be < " + std::to_string(KVROCKS_MAX_LSM_LEVEL)};
+  if (compression_start_level >= XROCKSCACHE_MAX_LSM_LEVEL) {
+    return {Status::NotOK, "compression_start_level must be < " + std::to_string(XROCKSCACHE_MAX_LSM_LEVEL)};
   }
   std::vector<std::string> compression_per_level_builder;
-  compression_per_level_builder.reserve(KVROCKS_MAX_LSM_LEVEL);
+  compression_per_level_builder.reserve(XROCKSCACHE_MAX_LSM_LEVEL);
 
   for (size_t i = 0; i < compression_start_level; i++) {
     compression_per_level_builder.emplace_back("kNoCompression");
   }
-  for (size_t i = compression_start_level; i < KVROCKS_MAX_LSM_LEVEL; i++) {
+  for (size_t i = compression_start_level; i < XROCKSCACHE_MAX_LSM_LEVEL; i++) {
     compression_per_level_builder.emplace_back(compression_option);
   }
   const std::string compression_per_level = util::StringJoin(compression_per_level_builder, ":");
@@ -156,6 +143,7 @@ Config::Config() {
 
   FieldWrapper fields[] = {
       {"daemonize", true, new YesNoField(&daemonize, false)},
+      {"xrockscache-profile", true, new YesNoField(&xrockscache_profile, false)},
       {"bind", true, new StringField(&binds_str_, "")},
       {"port", true, new UInt32Field(&port, kDefaultPort, 1, PORT_LIMIT)},
       {"socket-fd", true, new IntField(&socket_fd, -1, -1, 1 << 16)},
@@ -207,7 +195,6 @@ Config::Config() {
       {"pidfile", true, new StringField(&pidfile, kDefaultPidfile)},
       {"max-io-mb", false, new IntField(&max_io_mb, 0, 0, INT_MAX)},
       {"enable-blob-cache", true, new YesNoField(&enable_blob_cache, false)},
-      {"max-bitmap-to-string-mb", false, new IntField(&max_bitmap_to_string_mb, 16, 0, INT_MAX)},
       {"max-db-size", false, new IntField(&max_db_size, 0, 0, INT_MAX)},
       {"max-replication-mb", false, new IntField(&max_replication_mb, 0, 0, INT_MAX)},
       {"supervised", true, new EnumField<SupervisedMode>(&supervised_mode, supervised_modes, kSupervisedNone)},
@@ -248,18 +235,10 @@ Config::Config() {
       {"redis-cursor-compatible", false, new YesNoField(&redis_cursor_compatible, true)},
       {"redis-databases", true, new IntField(&redis_databases, 0, 0, INT_MAX)},
       {"resp3-enabled", false, new YesNoField(&resp3_enabled, true)},
-      {"hash-encoding-mode", false,
-       new EnumField<HashSubkeyEncodingMode>(&hash_encoding_mode, hash_subkey_encoding_modes,
-                                             HashSubkeyEncodingMode::kLegacy)},
-      {"hash-length-mode", false,
-       new EnumField<HashLengthMode>(&hash_length_mode, hash_length_modes, HashLengthMode::kAccurate)},
       {"repl-namespace-enabled", false, new YesNoField(&repl_namespace_enabled, false)},
       {"proto-max-bulk-len", false,
        new IntWithUnitField<uint64_t>(&proto_max_bulk_len, std::to_string(512 * MiB), 1 * MiB,
                                       4ULL * 1024 * 1024 * 1024)},
-      {"json-max-nesting-depth", false, new IntField(&json_max_nesting_depth, 1024, 0, INT_MAX)},
-      {"json-storage-format", false,
-       new EnumField<JsonStorageFormat>(&json_storage_format, json_storage_formats, JsonStorageFormat::JSON)},
       {"txn-context-enabled", true, new YesNoField(&txn_context_enabled, false)},
       {"skip-block-cache-deallocation-on-close", false, new YesNoField(&skip_block_cache_deallocation_on_close, false)},
       {"histogram-bucket-boundaries", true, new StringField(&histogram_bucket_boundaries_str_, "")},
@@ -275,7 +254,7 @@ Config::Config() {
       {"rocksdb.compression_zstd_max_train_bytes", true,
        new UInt32Field(&rocks_db.compression_zstd_max_train_bytes, 0, 0, UINT32_MAX)},
       {"rocksdb.compression_start_level", false,
-       new IntField(&rocks_db.compression_start_level, 2, 0, KVROCKS_MAX_LSM_LEVEL - 1)},
+       new IntField(&rocks_db.compression_start_level, 2, 0, XROCKSCACHE_MAX_LSM_LEVEL - 1)},
       {"rocksdb.block_size", true, new IntField(&rocks_db.block_size, 16384, 0, INT_MAX)},
       {"rocksdb.max_open_files", false, new IntField(&rocks_db.max_open_files, 8096, -1, INT_MAX)},
       {"rocksdb.write_buffer_size", false, new IntField(&rocks_db.write_buffer_size, 64, 0, 4096)},
@@ -565,7 +544,7 @@ void Config::initFieldCallback() {
              sync_checkpoint_dir = dir + "/sync_checkpoint";
              backup_sync_dir = dir + "/backup_for_sync";
              if (backup_dir == kDefaultBackupDir) backup_dir = dir + "/backup";
-             if (pidfile == kDefaultPidfile) pidfile = dir + "/kvrocks.pid";
+             if (pidfile == kDefaultPidfile) pidfile = dir + "/xrockscache.pid";
              return Status::OK();
            }},
           {"backup-dir",
@@ -634,7 +613,7 @@ void Config::initFieldCallback() {
                  return Status::OK();
                }
                if (!redis::CommandTable::IsExists(cmd)) {
-                 return {Status::NotOK, cmd + " is not Kvrocks supported command"};
+                 return {Status::NotOK, cmd + " is not an XRocksCache supported command"};
                }
                // profiling_sample_commands use command's original name, regardless of rename-command directive
                profiling_sample_commands.insert(cmd);
@@ -671,41 +650,30 @@ void Config::initFieldCallback() {
              srv->GetPerfLog()->SetMaxEntries(profiling_sample_record_max_len);
              return Status::OK();
            }},
-          {"migrate-sequence-gap",
-           [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
-             if (!srv) return Status::OK();
-             if (cluster_enabled) srv->slot_migrator->SetSequenceGapLimit(sequence_gap);
-             return Status::OK();
-           }},
-          {"migrate-batch-rate-limit-mb",
-           [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
-             if (!srv) return Status::OK();
-             srv->slot_migrator->SetMigrateBatchRateLimit(migrate_batch_rate_limit_mb * MiB);
-             return Status::OK();
-           }},
-          {"migrate-batch-size-kb",
-           [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
-             if (!srv) return Status::OK();
-             srv->slot_migrator->SetMigrateBatchSize(migrate_batch_size_kb * KiB);
-             return Status::OK();
-           }},
+           {"migrate-sequence-gap",
+            [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
+              if (!srv) return Status::OK();
+              return Status::OK();
+            }},
+           {"migrate-batch-rate-limit-mb",
+            [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
+              if (!srv) return Status::OK();
+              return Status::OK();
+            }},
+           {"migrate-batch-size-kb",
+            [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
+              if (!srv) return Status::OK();
+              return Status::OK();
+            }},
           {"log-level",
            [this](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
              if (!srv) return Status::OK();
              spdlog::set_level(log_level);
              return Status::OK();
            }},
-          {"persist-cluster-nodes-enabled",
-           [this](Server *srv, [[maybe_unused]] const std::string &k, const std::string &v) -> Status {
-             if (!srv || !cluster_enabled) return Status::OK();
-             auto nodes_file_path = NodesFilePath();
-             if (v == "yes") {
-               return srv->cluster->DumpClusterNodes(nodes_file_path);
-             }
-             // Remove the cluster nodes file to avoid stale cluster nodes info
-             remove(nodes_file_path.data());
-             return Status::OK();
-           }},
+           {"persist-cluster-nodes-enabled",
+            []([[maybe_unused]] Server *srv, [[maybe_unused]] const std::string &k,
+               [[maybe_unused]] const std::string &v) -> Status { return Status::OK(); }},
           {"repl-namespace-enabled",
            [](Server *srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
              if (!srv) return Status::OK();
@@ -975,6 +943,24 @@ Status Config::finish() {
   if ((redis_databases > 0) && (cluster_enabled)) {
     return {Status::NotOK, "cluster mode and redis-databases cannot be enabled at the same time"};
   }
+  if (xrockscache_profile) {
+    if (cluster_enabled) {
+      return {Status::NotOK, "cluster mode is not supported by the XRocksCache profile"};
+    }
+    if (master_port != 0) {
+      return {Status::NotOK, "replication is not supported by the XRocksCache profile"};
+    }
+    if (!load_tokens.empty() || repl_namespace_enabled) {
+      return {Status::NotOK, "namespaces are not supported by the XRocksCache profile"};
+    }
+    if (redis_databases > 0) {
+      return {Status::NotOK, "multiple databases are not supported by the XRocksCache profile"};
+    }
+    if (!rename_command_.empty()) {
+      return {Status::NotOK, "command renaming is not supported by the XRocksCache profile"};
+    }
+    redis::CommandTable::EnableXRocksCacheProfile();
+  }
   if (unixsocket.empty() && binds.size() == 0) {
     binds.emplace_back(kDefaultBindAddress);
   }
@@ -1023,7 +1009,7 @@ Status Config::Load(const CLIOptions &opts) {
     }
   } else {
     std::cout << "WARNING: No config file specified, default configuration applied. "
-              << "In order to specify a config file, use `kvrocks -c /path/to/kvrocks.conf`." << std::endl;
+              << "In order to specify a config file, use `xrockscache -c /path/to/xrockscache.conf`." << std::endl;
   }
 
   for (const auto &opt : opts.cli_options) {

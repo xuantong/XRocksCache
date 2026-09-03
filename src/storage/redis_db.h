@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include "cluster/cluster_defs.h"
+#include "cluster/redis_slot.h"
 #include "redis_metadata.h"
 #include "storage.h"
 

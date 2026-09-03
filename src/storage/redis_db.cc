@@ -30,15 +30,10 @@
 #include "parse_util.h"
 #include "rocksdb/iterator.h"
 #include "rocksdb/status.h"
-#include "storage/iterator.h"
 #include "storage/redis_metadata.h"
 #include "storage/storage.h"
 #include "time_util.h"
-#include "types/redis_hash.h"
-#include "types/redis_list.h"
-#include "types/redis_set.h"
 #include "types/redis_string.h"
-#include "types/redis_zset.h"
 
 namespace redis {
 
@@ -104,6 +99,7 @@ rocksdb::Status Database::GetRawMetadata(engine::Context &ctx, const Slice &ns_k
 }
 
 rocksdb::Status Database::Expire(engine::Context &ctx, const Slice &user_key, uint64_t timestamp) {
+  timestamp = storage_->GetConfig()->ClampXRocksCacheExpireTime(timestamp, util::GetTimeStampMS());
   std::string ns_key = AppendNamespacePrefix(user_key);
 
   std::string value;
@@ -509,16 +505,6 @@ rocksdb::Status Database::Dump(engine::Context &ctx, const Slice &user_key, std:
   std::string created_at_str(time_str);
   infos->emplace_back(created_at_str + "." + std::to_string(created_at.tv_usec));
 
-  if (metadata.Type() == kRedisList) {
-    ListMetadata list_metadata(false);
-    s = GetMetadata(ctx, {kRedisList}, ns_key, &list_metadata);
-    if (!s.ok()) return s.IsNotFound() ? rocksdb::Status::OK() : s;
-    infos->emplace_back("head");
-    infos->emplace_back(std::to_string(list_metadata.head));
-    infos->emplace_back("tail");
-    infos->emplace_back(std::to_string(list_metadata.tail));
-  }
-
   return rocksdb::Status::OK();
 }
 
@@ -657,81 +643,13 @@ rocksdb::Status Database::typeInternal(engine::Context &ctx, const Slice &key, R
 
 rocksdb::Status Database::Copy(engine::Context &ctx, const std::string &key, const std::string &new_key, bool nx,
                                bool delete_old, CopyResult *res) {
-  RedisType type = kRedisNone;
-  auto s = typeInternal(ctx, key, &type);
-  if (!s.ok()) return s;
-  if (type == kRedisNone) {
-    *res = CopyResult::KEY_NOT_EXIST;
-    return rocksdb::Status::OK();
-  }
-
-  if (nx) {
-    uint32_t exist = 0;
-    if (s = existsInternal(ctx, {new_key}, &exist), !s.ok()) return s;
-    if (exist > 0) {
-      *res = CopyResult::KEY_ALREADY_EXIST;
-      return rocksdb::Status::OK();
-    }
-  }
-
-  *res = CopyResult::DONE;
-
-  if (key == new_key) return rocksdb::Status::OK();
-
-  auto batch = storage_->GetWriteBatchBase();
-  WriteBatchLogData log_data(type);
-  s = batch->PutLogData(log_data.Encode());
-  if (!s.ok()) {
-    return s;
-  }
-
-  engine::DBIterator iter(ctx, ctx.GetReadOptions());
-  iter.Seek(key);
-
-  if (delete_old) {
-    s = batch->Delete(metadata_cf_handle_, key);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  // copy metadata
-  s = batch->Put(metadata_cf_handle_, new_key, iter.Value());
-  if (!s.ok()) {
-    return s;
-  }
-
-  auto subkey_iter = iter.GetSubKeyIterator();
-
-  if (subkey_iter != nullptr) {
-    auto zset_score_cf = type == kRedisZSet ? storage_->GetCFHandle(ColumnFamilyID::SecondarySubkey) : nullptr;
-
-    for (subkey_iter->Seek(); subkey_iter->Valid(); subkey_iter->Next()) {
-      InternalKey from_ikey(subkey_iter->Key(), storage_->IsSlotIdEncoded());
-      std::string to_ikey =
-          InternalKey(new_key, from_ikey.GetSubKey(), from_ikey.GetVersion(), storage_->IsSlotIdEncoded()).Encode();
-      // copy sub key
-      auto s = batch->Put(subkey_iter->ColumnFamilyHandle(), to_ikey, subkey_iter->Value());
-      if (!s.ok()) {
-        return s;
-      }
-
-      // The ZSET type stores an extra score and member field inside `zset_score` column family
-      // while compared to other composed data structures. The purpose is to allow to seek by score.
-      if (type == kRedisZSet) {
-        std::string score_bytes = subkey_iter->Value().ToString();
-        score_bytes.append(from_ikey.GetSubKey().ToString());
-        // copy score key
-        std::string score_key =
-            InternalKey(new_key, score_bytes, from_ikey.GetVersion(), storage_->IsSlotIdEncoded()).Encode();
-        auto s = batch->Put(zset_score_cf, score_key, Slice());
-        if (!s.ok()) {
-          return s;
-        }
-      }
-    }
-  }
-
-  return storage_->Write(ctx, storage_->DefaultWriteOptions(), batch->GetWriteBatch());
+  (void)ctx;
+  (void)key;
+  (void)new_key;
+  (void)nx;
+  (void)delete_old;
+  *res = CopyResult::KEY_NOT_EXIST;
+  return rocksdb::Status::NotSupported("COPY is disabled in XRocksCache minimal build");
 }
 
 std::optional<std::string> Database::lookupKeyByPattern(engine::Context &ctx, const std::string &pattern,
@@ -745,11 +663,9 @@ std::optional<std::string> Database::lookupKeyByPattern(engine::Context &ctx, co
     return std::nullopt;
   }
 
-  // hash field
-  std::string field;
   auto arrow_pos = pattern.find("->", match_pos + 1);
   if (arrow_pos != std::string::npos && arrow_pos + 2 < pattern.size()) {
-    field = pattern.substr(arrow_pos + 2);
+    return std::nullopt;
   }
 
   std::string key = pattern.substr(0, match_pos + 1);
@@ -757,191 +673,25 @@ std::optional<std::string> Database::lookupKeyByPattern(engine::Context &ctx, co
 
   std::string value;
   RedisType type = RedisType::kRedisNone;
-  if (!field.empty()) {
-    auto hash_db = redis::Hash(storage_, namespace_);
-    if (auto s = hash_db.Type(ctx, key, &type); !s.ok() || type != RedisType::kRedisHash) {
-      return std::nullopt;
-    }
-
-    if (auto s = hash_db.Get(ctx, key, field, &value); !s.ok()) {
-      return std::nullopt;
-    }
-  } else {
-    auto string_db = redis::String(storage_, namespace_);
-    if (auto s = string_db.Type(ctx, key, &type); !s.ok() || type != RedisType::kRedisString) {
-      return std::nullopt;
-    }
-    if (auto s = string_db.Get(ctx, key, &value); !s.ok()) {
-      return std::nullopt;
-    }
+  auto string_db = redis::String(storage_, namespace_);
+  if (auto s = string_db.Type(ctx, key, &type); !s.ok() || type != RedisType::kRedisString) {
+    return std::nullopt;
+  }
+  if (auto s = string_db.Get(ctx, key, &value); !s.ok()) {
+    return std::nullopt;
   }
   return value;
 }
 
 rocksdb::Status Database::Sort(engine::Context &ctx, RedisType type, const std::string &key, const SortArgument &args,
                                std::vector<std::optional<std::string>> *elems, SortResult *res) {
-  // Obtain the length of the object to sort.
-  const std::string ns_key = AppendNamespacePrefix(key);
-  Metadata metadata(type, false);
-  auto s = GetMetadata(ctx, {type}, ns_key, &metadata);
-  if (!s.ok()) return s;
-
-  if (metadata.size > SORT_LENGTH_LIMIT) {
-    *res = SortResult::LIMIT_EXCEEDED;
-    return rocksdb::Status::OK();
-  }
-  auto vectorlen = static_cast<int>(metadata.size);
-
-  // Adjust the offset and count of the limit
-  int offset = args.offset >= vectorlen ? 0 : std::clamp(args.offset, 0, vectorlen - 1);
-  int count = args.offset >= vectorlen ? 0 : std::clamp(args.count, -1, vectorlen - offset);
-  if (count == -1) count = vectorlen - offset;
-
-  // Get the elements that need to be sorted
-  std::vector<std::string> str_vec;
-  if (count != 0) {
-    if (type == RedisType::kRedisList) {
-      auto list_db = redis::List(storage_, namespace_);
-
-      if (args.dontsort) {
-        if (args.desc) {
-          s = list_db.Range(ctx, key, -count - offset, -1 - offset, &str_vec);
-          if (!s.ok()) return s;
-          std::reverse(str_vec.begin(), str_vec.end());
-        } else {
-          s = list_db.Range(ctx, key, offset, offset + count - 1, &str_vec);
-          if (!s.ok()) return s;
-        }
-      } else {
-        s = list_db.Range(ctx, key, 0, -1, &str_vec);
-        if (!s.ok()) return s;
-      }
-    } else if (type == RedisType::kRedisSet) {
-      auto set_db = redis::Set(storage_, namespace_);
-      s = set_db.Members(ctx, key, &str_vec);
-      if (!s.ok()) return s;
-
-      if (args.dontsort) {
-        str_vec = std::vector(std::make_move_iterator(str_vec.begin() + offset),
-                              std::make_move_iterator(str_vec.begin() + offset + count));
-      }
-    } else if (type == RedisType::kRedisZSet) {
-      auto zset_db = redis::ZSet(storage_, namespace_);
-      std::vector<MemberScore> member_scores;
-
-      if (args.dontsort) {
-        RangeRankSpec spec;
-        spec.start = offset;
-        spec.stop = offset + count - 1;
-        spec.reversed = args.desc;
-        s = zset_db.RangeByRank(ctx, key, spec, &member_scores, nullptr);
-        if (!s.ok()) return s;
-
-        for (auto &member_score : member_scores) {
-          str_vec.emplace_back(std::move(member_score.member));
-        }
-      } else {
-        s = zset_db.GetAllMemberScores(ctx, key, &member_scores);
-        if (!s.ok()) return s;
-
-        for (auto &member_score : member_scores) {
-          str_vec.emplace_back(std::move(member_score.member));
-        }
-      }
-    } else {
-      *res = SortResult::UNKNOWN_TYPE;
-      return s;
-    }
-  }
-
-  std::vector<RedisSortObject> sort_vec(str_vec.size());
-  for (size_t i = 0; i < str_vec.size(); ++i) {
-    sort_vec[i].obj = str_vec[i];
-  }
-
-  // Sort by BY, ALPHA, ASC/DESC
-  if (!args.dontsort) {
-    for (size_t i = 0; i < sort_vec.size(); ++i) {
-      std::string byval;
-      if (!args.sortby.empty()) {
-        auto lookup = lookupKeyByPattern(ctx, args.sortby, str_vec[i]);
-        if (!lookup.has_value()) continue;
-        byval = std::move(lookup.value());
-      } else {
-        byval = str_vec[i];
-      }
-
-      if (args.alpha && !args.sortby.empty()) {
-        sort_vec[i].v = byval;
-      } else if (!args.alpha && !byval.empty()) {
-        auto double_byval = ParseFloat<double>(byval);
-        if (!double_byval) {
-          *res = SortResult::DOUBLE_CONVERT_ERROR;
-          return rocksdb::Status::OK();
-        }
-        sort_vec[i].v = *double_byval;
-      }
-    }
-
-    std::sort(sort_vec.begin(), sort_vec.end(), [&args](const RedisSortObject &a, const RedisSortObject &b) {
-      return RedisSortObject::SortCompare(a, b, args);
-    });
-
-    // Gets the element specified by Limit
-    if (offset != 0 || count != vectorlen) {
-      sort_vec = std::vector(std::make_move_iterator(sort_vec.begin() + offset),
-                             std::make_move_iterator(sort_vec.begin() + offset + count));
-    }
-  }
-
-  // Perform storage
-  for (auto &elem : sort_vec) {
-    if (args.getpatterns.empty()) {
-      elems->emplace_back(elem.obj);
-    }
-    for (const std::string &pattern : args.getpatterns) {
-      std::optional<std::string> val = lookupKeyByPattern(ctx, pattern, elem.obj);
-      if (val.has_value()) {
-        elems->emplace_back(val.value());
-      } else {
-        elems->emplace_back(std::nullopt);
-      }
-    }
-  }
-
-  if (!args.storekey.empty()) {
-    std::vector<std::string> store_elems;
-    store_elems.reserve(elems->size());
-    for (const auto &e : *elems) {
-      store_elems.emplace_back(e.value_or(""));
-    }
-    redis::List list_db(storage_, namespace_);
-    s = list_db.Trim(ctx, args.storekey, -1, 0);
-
-    if (!s.ok()) return s;
-    uint64_t new_size = 0;
-    s = list_db.Push(ctx, args.storekey, std::vector<Slice>(store_elems.cbegin(), store_elems.cend()), false,
-                     &new_size);
-    if (!s.ok()) return s;
-  }
-
-  return rocksdb::Status::OK();
-}
-
-bool RedisSortObject::SortCompare(const RedisSortObject &a, const RedisSortObject &b, const SortArgument &args) {
-  if (!args.alpha) {
-    double score_a = std::get<double>(a.v);
-    double score_b = std::get<double>(b.v);
-    return !args.desc ? score_a < score_b : score_a > score_b;
-  } else {
-    if (!args.sortby.empty()) {
-      std::string cmp_a = std::get<std::string>(a.v);
-      std::string cmp_b = std::get<std::string>(b.v);
-      return !args.desc ? cmp_a < cmp_b : cmp_a > cmp_b;
-    } else {
-      return !args.desc ? a.obj < b.obj : a.obj > b.obj;
-    }
-  }
+  (void)ctx;
+  (void)type;
+  (void)key;
+  (void)args;
+  (void)elems;
+  *res = SortResult::UNKNOWN_TYPE;
+  return rocksdb::Status::NotSupported("SORT is disabled in XRocksCache minimal build");
 }
 
 }  // namespace redis

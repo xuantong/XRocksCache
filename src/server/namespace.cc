@@ -52,19 +52,7 @@ bool Namespace::IsAllowModify() const {
 }
 
 Status Namespace::loadFromDB(std::map<std::string, std::string>* db_tokens) const {
-  std::string value;
-  engine::Context ctx(storage_);
-  auto cf = storage_->GetCFHandle(ColumnFamilyID::Propagate);
-  auto s = storage_->Get(ctx, ctx.GetReadOptions(), cf, kNamespaceDBKey, &value);
-  if (!s.ok()) {
-    if (s.IsNotFound()) return Status::OK();
-    return {Status::NotOK, s.ToString()};
-  }
-
-  jsoncons::json j = jsoncons::json::parse(value);
-  for (const auto& iter : j.object_range()) {
-    db_tokens->insert({iter.key(), iter.value().as_string()});
-  }
+  (void)db_tokens;
   return Status::OK();
 }
 
@@ -228,10 +216,5 @@ Status Namespace::Rewrite(const std::map<std::string, std::string>& tokens) cons
   if (!config->repl_namespace_enabled) {
     return Status::OK();
   }
-  jsoncons::json json;
-  for (const auto& iter : tokens) {
-    json[iter.first] = iter.second;
-  }
-  engine::Context ctx(storage_);
-  return storage_->WriteToPropagateCF(ctx, kNamespaceDBKey, json.to_string());
+  return Status::OK();
 }

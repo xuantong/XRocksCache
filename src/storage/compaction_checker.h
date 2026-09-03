@@ -31,7 +31,6 @@ class CompactionChecker {
   explicit CompactionChecker(engine::Storage *storage) : storage_(storage) {}
   ~CompactionChecker() = default;
   void PickCompactionFilesForCf(const engine::ColumnFamilyConfig &cf_name);
-  void CompactPropagateAndPubSubFiles();
 
  private:
   engine::Storage *storage_ = nullptr;

@@ -41,17 +41,10 @@
 #include <variant>
 #include <vector>
 
-#include "cluster/cluster.h"
-#include "cluster/replication.h"
-#include "cluster/slot_import.h"
-#include "cluster/slot_migrate.h"
 #include "commands/commander.h"
 #include "common/time_util.h"
-#include "lua.hpp"
 #include "memory_profiler.h"
 #include "namespace.h"
-#include "search/index_manager.h"
-#include "search/indexer.h"
 #include "server/redis_connection.h"
 #include "stats/log_collector.h"
 #include "stats/stats.h"
@@ -85,15 +78,6 @@ struct ConnContext {
   }
 
   bool operator==(const ConnContext &c) const { return owner == c.owner && fd == c.fd; }
-};
-
-struct StreamConsumer {
-  Worker *owner;
-  int fd;
-  std::string ns;
-  redis::StreamEntryID last_consumed_id;
-  StreamConsumer(Worker *w, int fd, std::string ns, redis::StreamEntryID id)
-      : owner(w), fd(fd), ns(std::move(ns)), last_consumed_id(id) {}
 };
 
 struct ChannelSubscribeNum {
@@ -152,36 +136,11 @@ enum ClientType {
   kTypeSlave = (1ULL << 3),   // slave client
 };
 
-enum ServerLogType { kServerLogNone, kReplIdLog };
-
 enum class AuthResult {
   IS_USER,
   IS_ADMIN,
   INVALID_PASSWORD,
   NO_REQUIRE_PASS,
-};
-
-class ServerLogData {
- public:
-  // Redis::WriteBatchLogData always starts with digit ascii, we use alphabetic to
-  // distinguish ServerLogData with Redis::WriteBatchLogData.
-  static const char kReplIdTag = 'r';
-  static bool IsServerLogData(const char *header) {
-    if (header) return *header == kReplIdTag;
-    return false;
-  }
-
-  ServerLogData() = default;
-  explicit ServerLogData(ServerLogType type, std::string content) : type_(type), content_(std::move(content)) {}
-
-  ServerLogType GetType() const { return type_; }
-  std::string GetContent() const { return content_; }
-  std::string Encode() const;
-  Status Decode(const rocksdb::Slice &blob);
-
- private:
-  ServerLogType type_ = kServerLogNone;
-  std::string content_;
 };
 
 class SlotImport;
@@ -205,17 +164,10 @@ class Server {
   void AdjustOpenFilesLimit();
   void AdjustWorkerThreads();
 
-  Status AddMaster(const std::string &host, uint32_t port, bool force_reconnect);
-  Status RemoveMaster();
-  Status AddSlave(redis::Connection *conn, rocksdb::SequenceNumber next_repl_seq);
-  void DisconnectSlaves();
-  void CleanupExitedSlaves();
-  bool IsSlave() const { return !master_host_.empty(); }
+  bool IsSlave() const { return false; }
   void FeedMonitorConns(redis::Connection *conn, const std::vector<std::string> &tokens);
   static std::vector<std::string> RedactSensitiveTokens(const std::vector<std::string> &tokens);
-  void IncrFetchFileThread() { fetch_file_threads_num_++; }
-  void DecrFetchFileThread() { fetch_file_threads_num_--; }
-  int GetFetchFileThreadNum() const { return fetch_file_threads_num_; }
+  int GetFetchFileThreadNum() const { return 0; }
 
   int PublishMessage(const std::string &channel, const std::string &msg);
   void SubscribeChannel(const std::string &channel, redis::Connection *conn);
@@ -234,11 +186,6 @@ class Server {
 
   void BlockOnKey(const std::string &key, redis::Connection *conn);
   void UnblockOnKey(const std::string &key, redis::Connection *conn);
-  void BlockOnStreams(const std::vector<std::string> &keys, const std::vector<redis::StreamEntryID> &entry_ids,
-                      redis::Connection *conn);
-  void UnblockOnStreams(const std::vector<std::string> &keys, redis::Connection *conn);
-  void WakeupBlockingConns(const std::string &key, size_t n_conns);
-  void OnEntryAddedToStream(const std::string &ns, const std::string &key, const redis::StreamEntryID &entry_id);
 
   // WAIT command infrastructure
   void BlockOnWait(redis::Connection *conn, rocksdb::SequenceNumber target_seq, uint64_t num_replicas);
@@ -251,11 +198,6 @@ class Server {
   // Return the largest wait_context.target_seq that can wakeup given the seq.
   // If no wait_context can wakeup, return 0.
   rocksdb::SequenceNumber LargestTargetSeqToWakeup(rocksdb::SequenceNumber seq);
-
-  size_t GetReplicaCount() {
-    std::shared_lock<std::shared_mutex> guard(slave_threads_mu_);
-    return slave_threads_.size();
-  }
 
   std::string GetLastRandomKeyCursor();
   void SetLastRandomKeyCursor(const std::string &cursor);
@@ -317,17 +259,13 @@ class Server {
   std::string GetInfo(const std::string &ns, const std::vector<std::string> &sections,
                       InfoFormat format = InfoFormat::Text);
   std::string GetRocksDBStatsJson() const;
-  ReplState GetReplicationState();
 
-  bool PrepareRestoreDB();
-  void WaitNoMigrateProcessing();
   Status AsyncCompactDB(const std::string &begin_key = "", const std::string &end_key = "");
   Status AsyncBgSaveDB();
   Status AsyncPurgeOldBackups(uint32_t num_backups_to_keep, uint32_t backup_max_keep_hours);
   Status AsyncScanDBSize(const std::string &ns);
   void GetLatestKeyNumStats(const std::string &ns, KeyNumStats *stats);
   int64_t GetLastScanTime(const std::string &ns);
-  StatusOr<std::vector<rocksdb::BatchResult>> PollUpdates(uint64_t next_sequence, int64_t count, bool is_strict) const;
 
   std::string GenerateCursorFromKeyName(const std::string &key_name, CursorType cursor_type, const char *prefix = "");
   std::string GetKeyNameFromCursor(const std::string &cursor, CursorType cursor_type);
@@ -342,20 +280,6 @@ class Server {
   uint64_t GetClientID();
   void KillClient(int64_t *killed, const std::string &addr, uint64_t id, uint64_t type, bool skipme,
                   redis::Connection *conn);
-
-  Status ScriptExists(const std::string &sha) const;
-  Status ScriptGet(const std::string &sha, std::string *body) const;
-  Status ScriptSet(const std::string &sha, const std::string &body) const;
-  void ScriptReset();
-  Status ScriptFlush();
-
-  Status FunctionGetCode(const std::string &lib, std::string *code) const;
-  Status FunctionGetLib(const std::string &func, std::string *lib) const;
-  Status FunctionSetCode(const std::string &lib, const std::string &code) const;
-  Status FunctionSetLib(const std::string &func, const std::string &lib) const;
-
-  Status Propagate(const std::string &channel, const std::vector<std::string> &tokens) const;
-  Status ExecPropagatedCommand(const std::vector<std::string> &tokens);
 
   LogCollector<PerfEntry> *GetPerfLog() { return &perf_log_; }
   LogCollector<SlowEntry> *GetSlowLog() { return &slow_log_; }
@@ -374,17 +298,13 @@ class Server {
   Stats stats;
   engine::Storage *storage;
   MemoryProfiler memory_profiler;
-  std::unique_ptr<Cluster> cluster;
   static inline std::atomic<int64_t> unix_time_secs = 0;
-  std::unique_ptr<SlotMigrator> slot_migrator;
-  std::unique_ptr<SlotImport> slot_import;
 
   void UpdateWatchedKeysFromArgs(const std::vector<std::string> &args, const redis::CommandAttributes &attr);
   void UpdateWatchedKeysManually(const std::vector<std::string> &keys);
   void WatchKey(redis::Connection *conn, const std::vector<std::string> &keys);
   static bool IsWatchedKeysModified(redis::Connection *conn);
   void ResetWatchedKeys(redis::Connection *conn);
-  std::list<std::pair<std::string, uint32_t>> GetSlaveHostAndPort();
   Namespace *GetNamespace() { return &namespace_; }
 
   AuthResult AuthenticateUser(const std::string &user_password, std::string *ns);
@@ -392,10 +312,6 @@ class Server {
 #ifdef ENABLE_OPENSSL
   UniqueSSLContext ssl_ctx;
 #endif
-
-  // search
-  redis::GlobalIndexer indexer;
-  redis::IndexManager index_mgr;
 
  private:
   void cron();
@@ -413,9 +329,6 @@ class Server {
   std::atomic<bool> stop_ = false;
   std::atomic<bool> is_loading_ = false;
   int64_t start_time_secs_;
-  std::mutex slaveof_mu_;
-  std::string master_host_;
-  uint32_t master_port_ = 0;
   Config *config_ = nullptr;
   std::string last_random_key_cursor_;
   std::mutex last_random_key_cursor_mu_;
@@ -425,11 +338,6 @@ class Server {
   std::atomic<int> connected_clients_{0};
   std::atomic<int> monitor_clients_{0};
   std::atomic<uint64_t> total_clients_{0};
-
-  // slave
-  std::shared_mutex slave_threads_mu_;
-  std::list<std::unique_ptr<FeedSlaveThread>> slave_threads_;
-  std::atomic<int> fetch_file_threads_num_ = 0;
 
   // namespace
   Namespace namespace_;
@@ -457,9 +365,6 @@ class Server {
 
   std::atomic<int> blocked_clients_{0};
 
-  std::mutex blocked_stream_consumers_mu_;
-  std::map<std::string, std::set<std::shared_ptr<StreamConsumer>>> blocked_stream_consumers_;
-
   // WAIT command blocking infrastructure
   struct WaitContext {
     redis::Connection *conn;
@@ -478,7 +383,6 @@ class Server {
   std::thread compaction_checker_thread_;
   TaskRunner task_runner_;
   std::vector<std::unique_ptr<WorkerThread>> worker_threads_;
-  std::unique_ptr<ReplicationThread> replication_thread_;
   tbb::concurrent_queue<std::unique_ptr<WorkerThread>> recycle_worker_threads_;
 
   // memory

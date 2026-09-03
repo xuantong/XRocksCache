@@ -44,7 +44,6 @@
 #include "storage/storage.h"
 #include "string_util.h"
 #include "time_util.h"
-#include "vendor/crc64.h"
 #include "version_util.h"
 
 Server *srv = nullptr;
@@ -81,7 +80,7 @@ static CLIOptions ParseCommandLineOptions(int argc, char **argv) {
     if ((argv[i] == "-c"sv || argv[i] == "--config"sv) && i + 1 < argc) {
       opts.conf_file = argv[++i];
     } else if (argv[i] == "-v"sv || argv[i] == "--version"sv) {
-      std::cout << "kvrocks " << PrintVersion() << std::endl;
+      std::cout << "xrockscache " << PrintVersion() << std::endl;
       std::exit(0);
     } else if (argv[i] == "-h"sv || argv[i] == "--help"sv) {
       PrintUsage(*argv);
@@ -125,13 +124,13 @@ static Status InitSpdlog(const Config &config) {
       sinks.push_back(std::make_shared<spdlog::sinks::stderr_color_sink_mt>());
     } else {
       sinks.push_back(
-          std::make_shared<spdlog::sinks::daily_file_sink_mt>(dir + "/kvrocks.log", 0, 0, false, retention_days));
+          std::make_shared<spdlog::sinks::daily_file_sink_mt>(dir + "/xrockscache.log", 0, 0, false, retention_days));
     }
 
     sinks.back()->set_level(level);
   }
 
-  auto logger = std::make_shared<spdlog::logger>("kvrocks", sinks.begin(), sinks.end());
+  auto logger = std::make_shared<spdlog::logger>("xrockscache", sinks.begin(), sinks.end());
   logger->set_level(config.log_level);
   logger->set_pattern("[%Y-%m-%dT%H:%M:%S.%f%z][%^%L%$][%s:%#] %v");
   logger->flush_on(spdlog::level::info);
@@ -142,7 +141,6 @@ static Status InitSpdlog(const Config &config) {
 
 int main(int argc, char *argv[]) {
   srand(static_cast<unsigned>(util::GetTimeStamp()));
-  crc64_init();
 
   evthread_use_pthreads();
   auto event_exit = MakeScopeExit(libevent_global_shutdown);
@@ -168,7 +166,7 @@ int main(int argc, char *argv[]) {
     std::cerr << "Failed to initialize logging system. Error: " << s.Msg() << std::endl;
     return 1;
   }
-  INFO("kvrocks {}", PrintVersion());
+  INFO("xrockscache {}", PrintVersion());
   // Tricky: We don't expect that different instances running on the same port,
   // but the server use REUSE_PORT to support the multi listeners. So we connect
   // the listen port to check if the port has already listened or not.

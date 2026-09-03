@@ -34,6 +34,30 @@
 
 namespace redis {
 
+namespace {
+
+rocksdb::Status ApplyXRocksCacheTTL(engine::Storage *storage, std::string *raw_value) {
+  const auto *config = storage->GetConfig();
+  if (!config->xrockscache_profile) return rocksdb::Status::OK();
+
+  Metadata metadata(kRedisString, false);
+  auto s = metadata.Decode(*raw_value);
+  if (!s.ok()) return s;
+
+  const uint64_t expire = config->ClampXRocksCacheExpireTime(metadata.expire, util::GetTimeStampMS());
+  if (expire == metadata.expire) return rocksdb::Status::OK();
+
+  const size_t value_offset = Metadata::GetOffsetAfterExpire((*raw_value)[0]);
+  std::string value = raw_value->substr(value_offset);
+  metadata.expire = expire;
+  raw_value->clear();
+  metadata.Encode(raw_value);
+  raw_value->append(value);
+  return rocksdb::Status::OK();
+}
+
+}  // namespace
+
 std::vector<rocksdb::Status> String::getRawValues(engine::Context &ctx, const std::vector<Slice> &keys,
                                                   std::vector<std::string> *raw_values) {
   raw_values->clear();
@@ -108,11 +132,20 @@ std::vector<rocksdb::Status> String::getValues(engine::Context &ctx, const std::
 }
 
 rocksdb::Status String::updateRawValue(engine::Context &ctx, const std::string &ns_key, const std::string &raw_value) {
+  const std::string *value_to_write = &raw_value;
+  std::string bounded_raw_value;
+  if (storage_->GetConfig()->xrockscache_profile) {
+    bounded_raw_value = raw_value;
+    auto ttl_status = ApplyXRocksCacheTTL(storage_, &bounded_raw_value);
+    if (!ttl_status.ok()) return ttl_status;
+    value_to_write = &bounded_raw_value;
+  }
+
   auto batch = storage_->GetWriteBatchBase();
   WriteBatchLogData log_data(kRedisString);
   auto s = batch->PutLogData(log_data.Encode());
   if (!s.ok()) return s;
-  s = batch->Put(metadata_cf_handle_, ns_key, raw_value);
+  s = batch->Put(metadata_cf_handle_, ns_key, *value_to_write);
   if (!s.ok()) return s;
   return storage_->Write(ctx, storage_->DefaultWriteOptions(), batch->GetWriteBatch());
 }
@@ -512,6 +545,7 @@ rocksdb::Status String::MSet(engine::Context &ctx, const std::vector<StringPair>
   auto s = batch->PutLogData(log_data.Encode());
   if (!s.ok()) return s;
 
+  const uint64_t now_ms = util::GetTimeStampMS();
   for (size_t i = 0; i < pairs.size(); i++) {
     Metadata metadata(kRedisString, false);
     if (args.keep_ttl) {
@@ -521,6 +555,7 @@ rocksdb::Status String::MSet(engine::Context &ctx, const std::vector<StringPair>
     } else {
       metadata.expire = args.expire;
     }
+    metadata.expire = storage_->GetConfig()->ClampXRocksCacheExpireTime(metadata.expire, now_ms);
     std::string bytes;
     metadata.Encode(&bytes);
     bytes.append(pairs[i].value.data(), pairs[i].value.size());

@@ -1,100 +1,46 @@
-Apache Kvrocks
-Copyright 2022-2026 The Apache Software Foundation
+XRocksCache
+Copyright 2026 XRocksCache contributors
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
+中文：
+本产品包含基于 Apache License 2.0 授权的软件及其派生代码。
+部分代码源自 Apache Kvrocks 项目，版权归 The Apache Software Foundation 及其贡献者所有。
+XRocksCache 保留必要的上游版权与许可归属，但项目定位、文档、配置和发布目标均独立于上游项目。
 
-================================================================
-
-Thanks to designers Lingyu Tian and Shili Fan for contributing the logo of Kvrocks.
-
-================================================================
-
-This product includes a number of Dependencies with separate copyright notices
-and license terms. Your use of these submodules is subject to the terms and
-conditions of the following licenses.
+English:
+This product includes software and derivative code licensed under the Apache License 2.0.
+Portions of the code are derived from the Apache Kvrocks project, copyright The Apache Software Foundation and its contributors.
+XRocksCache keeps the required upstream copyright and license attribution, while its product scope, documentation, configuration, and release target are independent from the upstream project.
 
 ================================================================
 
-================================================================
-Apache-2.0 licenses
-================================================================
-The following components are provided under the Apache-2.0 License.See project link for details.
-The text of each license is the standard Apache 2.0 license.
+Third-party dependencies / 第三方依赖
 
-* rocksdb(https://github.com/facebook/rocksdb)
+The following dependency list describes components still used by XRocksCache after the minimal K/V cache cleanup.
+以下依赖列表仅描述 XRocksCache 精简为 K/V 缓存后仍在使用的组件。
 
-NB: RocksDB is dual-licensed under both the GPLv2 and Apache 2.0 License.
-This product uses it under the Apache 2.0 License.
+Apache-2.0:
+- RocksDB: https://github.com/facebook/rocksdb
+- oneTBB: https://github.com/oneapi-src/oneTBB
+- fast_float: https://github.com/fastfloat/fast_float
 
-* oneTBB(https://github.com/oneapi-src/oneTBB)
-* fast_float(https://github.com/fastfloat/fast_float)
+BSD-2-Clause:
+- lz4: https://github.com/lz4/lz4
+- xxHash: https://github.com/Cyan4973/xxHash
 
-NB: fast_float is available under Apache-2.0, MIT, or Boost Software License Version 1.0.
-This product uses it under the Apache 2.0 License and reuses the text in the root LICENSE file.
+BSD-3-Clause:
+- libevent: https://github.com/libevent/libevent
+- snappy: https://github.com/google/snappy
 
-Files src/common/rocksdb_crc32c.h and src/storage/batch_debugger.h are modified from RocksDB.
-Files src/types/bloom_filter.* are modified from Apache Arrow.
-The text of the license is the standard Apache 2.0 license.
+MIT:
+- fmt: https://github.com/fmtlib/fmt
+- cpptrace: https://github.com/jeremy-rifkin/cpptrace
+- spdlog: https://github.com/gabime/spdlog
 
-================================================================
-BSD-2-Clause licenses
-================================================================
-The following components are provided under the BSD-2-Clause License. See project link for details.
-The text of each license is also included in licenses/LICENSE-[project].txt.
+Boost Software License Version 1.0:
+- span-lite: https://github.com/martinmoene/span-lite
 
-* lz4(https://github.com/lz4/lz4)
-* xxHash(https://github.com/Cyan4973/xxHash)
+zlib/libpng:
+- zlib-ng: https://github.com/zlib-ng/zlib-ng
 
-NB: This product only uses the source code in `lib` directory which is under the BSD 2-Clause.
-
-================================================================
-BSD-3-Clause licenses
-================================================================
-The following components are provided under the BSD-3-Clause License. See project link for details.
-The text of each license is also included in licenses/LICENSE-[project].txt.
-
-* googletest(https://github.com/google/googletest)
-* libevent(https://github.com/libevent/libevent)
-* snappy(https://github.com/google/snappy)
-
-Files src/types/geohash.*, src/vendor/rand.*, src/storage/scripting.*
-and some utility functions in src/common are modified from Redis.
-The text of the license is included in licenses/LICENSE-redis.txt.
-
-================================================================
-MIT licenses
-================================================================
-The following components are provided under the MIT License. See project link for details.
-The text of each license is also included in licenses/LICENSE-[project].txt
-
-* fmt(https://github.com/fmtlib/fmt)
-* LuaJIT(https://github.com/KvrocksLabs/LuaJIT)
-* lua(https://github.com/KvrocksLabs/lua, alternative to LuaJIT)
-* hat-trie(https://github.com/Tessil/hat-trie)
-* pegtl(https://github.com/taocpp/PEGTL, NOTE: changed to Boost Software License Version 1.0 in main branch)
-* cpptrace(https://github.com/jeremy-rifkin/cpptrace)
-* spdlog(https://github.com/gabime/spdlog)
-
-================================================================
-Boost Software License Version 1.0
-================================================================
-The following components are provided under the Boost Software License Version 1.0. See project link for details.
-The text of each license is also included in licenses/LICENSE-[project].txt
-
-* jsoncons(https://github.com/danielaparker/jsoncons)
-* span-lite(https://github.com/martinmoene/span-lite)
-* range-v3(https://github.com/ericniebler/range-v3)
-
-================================================================
-zlib/libpng licenses
-================================================================
-The following components are provided under the zlib/libpng License. See project link for details.
-The text of each license is also included in licenses/LICENSE-[project].txt
-
-* zlib-ng(https://github.com/zlib-ng/zlib-ng)
-
-================================================================
-Public Domain
-================================================================
-Files src/vendor/sha1.* are provided in Public Domain by Steve Reid <steve@edmweb.com>.
+License texts are kept under the root LICENSE file and the licenses/ directory when applicable.
+相关许可证正文保留在根目录 LICENSE 文件以及 licenses/ 目录中。

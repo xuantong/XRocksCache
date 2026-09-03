@@ -20,7 +20,10 @@
 
 #include "commander.h"
 
-#include "cluster/cluster_defs.h"
+#include <unordered_set>
+
+#include "cluster/redis_slot.h"
+#include "common/string_util.h"
 #include "server/redis_reply.h"
 
 namespace redis {
@@ -39,13 +42,84 @@ RegisterToCommandTable::RegisterToCommandTable(CommandCategory category,
   }
 }
 
-size_t CommandTable::Size() { return redis_command_table.size(); }
+size_t CommandTable::Size() { return commands.size(); }
 
 const CommandMap *CommandTable::GetOriginal() { return &original_commands; }
 
 CommandMap *CommandTable::Get() { return &commands; }
 
-void CommandTable::Reset() { commands = original_commands; }
+void CommandTable::Reset() {
+  commands = original_commands;
+  profile_disabled_commands.clear();
+}
+
+void CommandTable::EnableXRocksCacheProfile() {
+  static const std::unordered_set<std::string> supported_commands = {
+      "auth",   "client", "command", "dbsize", "decr",    "decrby", "del",     "echo",
+      "exists", "expire", "get",     "hello",  "incr",    "incrby", "info",    "mget",
+      "mset",   "pexpire", "ping",    "pttl",   "set",     "ttl",
+  };
+
+  // Commands outside XRocksCache's K/V cache scope.
+  // Seeding them here keeps the friendly "command not supported" reply instead of "unknown command".
+  static const std::unordered_set<std::string> removed_commands = {
+      "_db_name", "_fetch_file", "_fetch_meta", "applybatch", "asking", "bf.add", "bf.card", "bf.exists",
+      "bf.info", "bf.insert", "bf.madd", "bf.mexists", "bf.reserve", "bgsave", "bitcount", "bitop",
+      "bitpos", "blmove", "blmpop", "blpop", "brpop", "bzmpop", "bzpopmax", "bzpopmin",
+      "cas", "cf.add", "cf.reserve", "cluster", "clusterx", "compact", "config", "copy",
+      "debug", "delex", "digest", "discard", "disk", "dump", "eval", "eval_ro",
+      "evalsha", "evalsha_ro", "exec", "expireat", "expiretime", "flushall", "flushbackup", "flushblockcache",
+      "flushdb", "flushmemtable", "ft._list", "ft.create", "ft.dropindex", "ft.explain", "ft.explainsql", "ft.info",
+      "ft.search", "ft.searchsql", "ft.tagvals", "function", "geoadd", "geodist", "geohash", "geopos",
+      "georadius", "georadius_ro", "georadiusbymember", "georadiusbymember_ro", "geosearch", "geosearchstore", "getbit", "getdel",
+      "getex", "getrange", "getset", "hdel", "hexists", "hget", "hgetall", "hgetex",
+      "hincrby", "hincrbyfloat", "hkeys", "hlen", "hmget", "hmset", "hpersist", "hrandfield",
+      "hrangebylex", "hscan", "hset", "hsetex", "hsetexpire", "hsetnx", "hstrlen", "hvals",
+      "incrbyfloat", "json.arrappend", "json.arrindex", "json.arrinsert", "json.arrlen", "json.arrpop", "json.arrtrim", "json.clear",
+      "json.debug", "json.del", "json.forget", "json.get", "json.info", "json.merge", "json.mget", "json.mset",
+      "json.numincrby", "json.nummultby", "json.objkeys", "json.objlen", "json.resp", "json.set", "json.strappend", "json.strlen",
+      "json.toggle", "json.type", "keys", "kmetadata", "kprofile", "lastsave", "latency", "lcs",
+      "lindex", "linsert", "llen", "lmove", "lmpop", "lpop", "lpos", "lpush",
+      "lpushx", "lrange", "lrem", "lset", "ltrim", "memory", "monitor", "move",
+      "movex", "mpublish", "msetex", "msetnx", "multi", "namespace", "object", "perflog",
+      "persist", "pexpireat", "pexpiretime", "pfadd", "pfcount", "pfmerge", "pollupdates", "psetex",
+      "psubscribe", "psync", "publish", "pubsub", "punsubscribe", "randomkey", "rdb", "readonly",
+      "readwrite", "rename", "renamenx", "replconf", "replicaof", "reset", "restore", "role",
+      "rpop", "rpoplpush", "rpush", "rpushx", "sadd", "scan", "scard", "script",
+      "sdiff", "sdiffstore", "select", "setbit", "setnx", "setrange", "shutdown", "siadd",
+      "sicard", "siexists", "sinter", "sintercard", "sinterstore", "sirange", "sirangebyvalue", "sirem",
+      "sirevrange", "sirevrangebyvalue", "sismember", "slaveof", "slowlog", "smembers", "smismember", "smove",
+      "spop", "srandmember", "srem", "sscan", "sst", "ssubscribe", "stats", "strlen",
+      "subscribe", "substr", "sunion", "sunionstore", "sunsubscribe", "tdigest.add", "tdigest.byrank", "tdigest.byrevrank",
+      "tdigest.cdf", "tdigest.create", "tdigest.info", "tdigest.max", "tdigest.merge", "tdigest.min", "tdigest.quantile", "tdigest.rank",
+      "tdigest.reset", "tdigest.revrank", "tdigest.trimmed_mean", "time", "ts.add", "ts.alter", "ts.create", "ts.createrule",
+      "ts.decrby", "ts.del", "ts.get", "ts.incrby", "ts.info", "ts.madd", "ts.mget", "ts.mrange",
+      "ts.mrevrange", "ts.queryindex", "ts.range", "ts.revrange", "type", "unlink", "unsubscribe", "unwatch",
+      "wait", "watch", "xack", "xadd", "xautoclaim", "xclaim", "xdel", "xgroup",
+      "xinfo", "xlen", "xpending", "xrange", "xread", "xreadgroup", "xrevrange", "xsetid",
+      "xtrim", "zadd", "zcard", "zcount", "zdiff", "zdiffstore", "zincrby", "zinter",
+      "zintercard", "zinterstore", "zlexcount", "zmpop", "zmscore", "zpopmax", "zpopmin", "zrandmember",
+      "zrange", "zrangebylex", "zrangebyscore", "zrangestore", "zrank", "zrem", "zremrangebylex", "zremrangebyrank",
+      "zremrangebyscore", "zrevrange", "zrevrangebylex", "zrevrangebyscore", "zrevrank", "zscan", "zscore", "zunion",
+      "zunionstore",
+  };
+
+  profile_disabled_commands = removed_commands;
+  for (auto iter = commands.begin(); iter != commands.end();) {
+    if (supported_commands.contains(iter->second->name)) {
+      ++iter;
+      continue;
+    }
+
+    profile_disabled_commands.insert(iter->first);
+    profile_disabled_commands.insert(iter->second->name);
+    iter = commands.erase(iter);
+  }
+}
+
+bool CommandTable::IsDisabledByProfile(const std::string &name) {
+  return profile_disabled_commands.contains(util::ToLower(name));
+}
 
 std::string CommandTable::GetCommandInfo(const CommandAttributes *command_attributes) {
   std::string command, command_flags;

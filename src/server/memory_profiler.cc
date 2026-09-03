@@ -56,7 +56,7 @@ Status CheckIfProfilingEnabled() {
   }
   if (!enabled) {
     return {Status::NotOK,
-            fmt::format("jemalloc profiling isn't enabled, please run Kvrocks with following environments: `{}`",
+            fmt::format("jemalloc profiling isn't enabled, please run XRocksCache with following environments: `{}`",
                         "export MALLOC_CONF=\"prof:true,background_thread:true\"")};
   }
   return Status::OK();

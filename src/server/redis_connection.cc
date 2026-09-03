@@ -30,7 +30,6 @@
 #include "fmt/format.h"
 #include "fmt/ostream.h"
 #include "logging.h"
-#include "search/indexer.h"
 #include "server/redis_reply.h"
 #include "string_util.h"
 #ifdef ENABLE_OPENSSL
@@ -476,14 +475,35 @@ Status Connection::ExecuteCommand(engine::Context &ctx, const std::string &cmd_n
   return s;
 }
 
-static bool IsCmdForIndexing(uint64_t cmd_flags, CommandCategory cmd_cat) {
-  return (cmd_flags & redis::kCmdWrite) &&
-         (cmd_cat == CommandCategory::Hash || cmd_cat == CommandCategory::JSON || cmd_cat == CommandCategory::Key ||
-          cmd_cat == CommandCategory::Script || cmd_cat == CommandCategory::Function);
-}
+static Status ValidateXRocksCacheRequest(const Config *config, const CommandAttributes *attributes,
+                                         const std::vector<std::string> &args) {
+  if (!config->xrockscache_profile) return Status::OK();
 
-static bool IsCmdAllowedInStaleData(const std::string &cmd_name) {
-  return cmd_name == "info" || cmd_name == "slaveof" || cmd_name == "config";
+  bool key_too_large = false;
+  attributes->ForEachKeyRange(
+      [&key_too_large](const std::vector<std::string> &command_args, const CommandKeyRange &range) {
+        range.ForEachKey(
+            [&key_too_large](const std::string &key) {
+              if (key.size() > kXRocksCacheMaxKeyBytes) key_too_large = true;
+            },
+            command_args);
+      },
+      args);
+  if (key_too_large) {
+    return {Status::RedisParseErr, "ERR key exceeds XRocksCache maximum size of 512 KiB"};
+  }
+
+  if (attributes->name == "set" && args[2].size() > kXRocksCacheMaxValueBytes) {
+    return {Status::RedisParseErr, "ERR value exceeds XRocksCache maximum size of 1 MiB"};
+  }
+  if (attributes->name == "mset") {
+    for (size_t i = 2; i < args.size(); i += 2) {
+      if (args[i].size() > kXRocksCacheMaxValueBytes) {
+        return {Status::RedisParseErr, "ERR value exceeds XRocksCache maximum size of 1 MiB"};
+      }
+    }
+  }
+  return Status::OK();
 }
 
 void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
@@ -512,6 +532,14 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
             "Cross-Protocol Scripting attack. Connection aborted.");
         EnableFlag(kCloseAsync);
         return;
+      }
+      if (redis::CommandTable::IsDisabledByProfile(cmd_name)) {
+        if (GetNamespace().empty() && !password.empty()) {
+          Reply(redis::Error({Status::RedisNoAuth, "Authentication required."}));
+        } else {
+          Reply(redis::Error({Status::NotOK, "command not supported by XRocksCache"}));
+        }
+        continue;
       }
       Reply(redis::Error(
           {Status::NotOK,
@@ -578,6 +606,12 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
       continue;
     }
 
+    s = ValidateXRocksCacheRequest(config, attributes, cmd_tokens);
+    if (!s.IsOK()) {
+      Reply(redis::Error(s));
+      continue;
+    }
+
     if (is_multi_exec && (cmd_flags & kCmdNoMulti)) {
       Reply(redis::Error({Status::NotOK, fmt::format("{} inside MULTI is not allowed", util::ToUpper(cmd_name))}));
       continue;
@@ -586,14 +620,6 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
     if ((cmd_flags & kCmdAdmin) && !IsAdmin()) {
       Reply(redis::Error({Status::RedisExecErr, errAdminPermissionRequired}));
       continue;
-    }
-
-    if (config->cluster_enabled) {
-      s = srv_->cluster->CanExecByMySelf(attributes, cmd_tokens, this);
-      if (!s.IsOK()) {
-        Reply(redis::Error(s));
-        continue;
-      }
     }
 
     // reset the ASKING flag after executing the next query
@@ -616,14 +642,6 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
 
     if ((cmd_flags & kCmdWrite) && !(cmd_flags & kCmdNoDBSizeCheck) && srv_->storage->ReachedDBSizeLimit()) {
       Reply(redis::Error({Status::NotOK, "write command not allowed when reached max-db-size."}));
-      continue;
-    }
-
-    if (!config->slave_serve_stale_data && srv_->IsSlave() && !IsCmdAllowedInStaleData(cmd_name) &&
-        srv_->GetReplicationState() != kReplConnected) {
-      Reply(redis::Error({Status::RedisMasterDown,
-                          "Link with MASTER is down "
-                          "and slave-serve-stale-data is set to 'no'."}));
       continue;
     }
 
@@ -653,32 +671,7 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
       }
       engine::Context ctx(srv_->storage);
 
-      std::vector<GlobalIndexer::RecordResult> index_records;
-      if (!srv_->index_mgr.index_map.empty() && IsCmdForIndexing(cmd_flags, attributes->category) &&
-          !config->cluster_enabled) {
-        attributes->ForEachKeyRange(
-            [&, this](const std::vector<std::string> &args, const CommandKeyRange &key_range) {
-              key_range.ForEachKey(
-                  [&, this](const std::string &key) {
-                    auto res = srv_->indexer.Record(ctx, key, ns_);
-                    if (res.IsOK()) {
-                      index_records.push_back(*res);
-                    } else if (!res.Is<Status::NoPrefixMatched>() && !res.Is<Status::TypeMismatched>()) {
-                      WARN("[connection] index recording failed for key: {}", key);
-                    }
-                  },
-                  args);
-            },
-            cmd_tokens);
-      }
-
       s = ExecuteCommand(ctx, cmd_name, cmd_tokens, current_cmd.get(), &reply);
-      for (const auto &record : index_records) {
-        auto s = GlobalIndexer::Update(ctx, record);
-        if (!s.IsOK() && !s.Is<Status::TypeMismatched>()) {
-          WARN("[connection] index updating failed for key: {}", record.key);
-        }
-      }
     }
 
     if (!(cmd_flags & redis::kCmdSkipMonitor)) {

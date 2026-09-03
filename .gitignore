@@ -52,3 +52,7 @@
 /build/
 /cmake-build-*/
 /build-*/
+
+# XRocksCache benchmark artifacts
+/benchmark/bin/
+/benchmark/results/

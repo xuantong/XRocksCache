@@ -159,7 +159,7 @@ UniqueSSLContext CreateSSLContext(const Config *config, const SSL_METHOD *method
     SSL_CTX_set_timeout(ssl_ctx.get(), config->tls_session_cache_timeout);
     SSL_CTX_sess_set_cache_size(ssl_ctx.get(), config->tls_session_cache_size);
 
-    const char *session_id = "kvrocks";
+    const char *session_id = "xrockscache";
     SSL_CTX_set_session_id_context(ssl_ctx.get(), (const unsigned char *)session_id, strlen(session_id));
   } else {
     SSL_CTX_set_session_cache_mode(ssl_ctx.get(), SSL_SESS_CACHE_OFF);

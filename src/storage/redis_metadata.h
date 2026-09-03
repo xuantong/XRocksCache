@@ -24,6 +24,7 @@
 #include <sys/time.h>
 
 #include <atomic>
+#include <array>
 #include <bitset>
 #include <initializer_list>
 #include <limits>
@@ -31,14 +32,11 @@
 #include <vector>
 
 #include "encoding.h"
-#include "types/redis_stream_base.h"
 
 constexpr bool USE_64BIT_COMMON_FIELD_DEFAULT = METADATA_ENCODING_VERSION != 0;
 
-// We write enum integer value of every datatype
-// explicitly since it cannot be changed once confirmed
-// Note that if you want to add a new redis type in `RedisType`
-// you should also add a type name to the `RedisTypeNames` below
+// Keep historical type ids stable so XRocksCache can recognize old metadata
+// and return WRONGTYPE instead of mis-reading unsupported values as strings.
 enum RedisType : uint8_t {
   kRedisNone = 0,
   kRedisString = 1,
@@ -103,16 +101,6 @@ enum RedisCommand {
 
 constexpr const char *kErrMsgWrongType = "WRONGTYPE Operation against a key holding the wrong kind of value";
 constexpr const char *kErrMsgKeyExpired = "the key was expired";
-
-enum class HashSubkeyEncodingMode : uint8_t {
-  kLegacy = 0,
-  kFieldExpiration = 1,
-};
-
-enum class HashLengthMode : uint8_t {
-  kAccurate = 0,
-  kApproximate = 1,
-};
 
 using rocksdb::Slice;
 
@@ -200,13 +188,14 @@ class Metadata {
   // no other key-values.
   // this means that the metadata of these types do NOT have
   // `version` and `size` field.
-  // e.g. RedisString, RedisJson
+  // e.g. RedisString. RedisJson is kept only for historical metadata decoding.
   bool IsSingleKVType() const;
 
   // return whether the `size` field of this type can be zero.
   // if a type is NOT an emptyable type,
   // any key of this type is regarded as expired if `size` equals to 0.
-  // e.g. any SingleKVType, RedisStream, RedisBloomFilter
+  // e.g. any SingleKVType. Historical emptyable complex types are recognized
+  // only so unsupported legacy keys are not incorrectly treated as expired.
   bool IsEmptyableType() const;
 
   virtual void Encode(std::string *dst) const;
@@ -218,267 +207,4 @@ class Metadata {
 
  private:
   static uint64_t generateVersion();
-};
-
-class HashMetadata : public Metadata {
- public:
-  static constexpr size_t kFieldExpirationPrefixSize = sizeof(uint64_t);
-
-  HashSubkeyEncodingMode mode = HashSubkeyEncodingMode::kLegacy;
-  uint64_t persist = 0;
-  uint64_t lower = 0;
-  uint64_t upper = 0;
-
-  explicit HashMetadata(bool generate_version = true, HashSubkeyEncodingMode mode = HashSubkeyEncodingMode::kLegacy)
-      : Metadata(kRedisHash, generate_version), mode(mode) {}
-
-  bool IsLegacySubkeyEncoding() const { return mode == HashSubkeyEncodingMode::kLegacy; }
-  bool IsFieldExpirationEncoding() const { return mode == HashSubkeyEncodingMode::kFieldExpiration; }
-
-  [[nodiscard]] std::string EncodeSubkeyValue(Slice value, uint64_t expire = 0) const;
-  [[nodiscard]] rocksdb::Status DecodeSubkeyValue(Slice *value, uint64_t *expire = nullptr) const;
-
-  void Encode(std::string *dst) const override;
-  using Metadata::Decode;
-  rocksdb::Status Decode(Slice *input) override;
-};
-
-class SetMetadata : public Metadata {
- public:
-  explicit SetMetadata(bool generate_version = true) : Metadata(kRedisSet, generate_version) {}
-};
-
-class ZSetMetadata : public Metadata {
- public:
-  explicit ZSetMetadata(bool generate_version = true) : Metadata(kRedisZSet, generate_version) {}
-};
-
-class BitmapMetadata : public Metadata {
- public:
-  explicit BitmapMetadata(bool generate_version = true) : Metadata(kRedisBitmap, generate_version) {}
-};
-
-class SortedintMetadata : public Metadata {
- public:
-  explicit SortedintMetadata(bool generate_version = true) : Metadata(kRedisSortedint, generate_version) {}
-};
-
-class ListMetadata : public Metadata {
- public:
-  uint64_t head;
-  uint64_t tail;
-  explicit ListMetadata(bool generate_version = true);
-
-  void Encode(std::string *dst) const override;
-  using Metadata::Decode;
-  rocksdb::Status Decode(Slice *input) override;
-};
-
-class StreamMetadata : public Metadata {
- public:
-  redis::StreamEntryID last_generated_id;
-  redis::StreamEntryID recorded_first_entry_id;
-  redis::StreamEntryID max_deleted_entry_id;
-  redis::StreamEntryID first_entry_id;
-  redis::StreamEntryID last_entry_id;
-  uint64_t entries_added = 0;
-  uint64_t group_number = 0;
-
-  explicit StreamMetadata(bool generate_version = true) : Metadata(kRedisStream, generate_version) {}
-
-  void Encode(std::string *dst) const override;
-  using Metadata::Decode;
-  rocksdb::Status Decode(Slice *input) override;
-};
-
-class BloomChainMetadata : public Metadata {
- public:
-  /// The number of sub-filters
-  uint16_t n_filters;
-
-  /// Adding an element to a Bloom filter never fails due to the data structure "filling up". Instead the error rate
-  /// starts to grow. To keep the error close to the one set on filter initialisation - the bloom filter will
-  /// auto-scale, meaning when capacity is reached an additional sub-filter will be created.
-  ///
-  /// The capacity of the new sub-filter is the capacity of the last sub-filter multiplied by expansion.
-  ///
-  /// The default expansion value is 2.
-  ///
-  /// For non-scaling, expansion should be set to 0
-  uint16_t expansion;
-
-  /// The number of entries intended to be added to the filter. If your filter allows scaling, the capacity of the last
-  /// sub-filter should be: base_capacity -> base_capacity * expansion -> base_capacity * expansion^2...
-  ///
-  /// The default base_capacity value is 100.
-  uint32_t base_capacity;
-
-  /// The desired probability for false positives.
-  ///
-  /// The rate is a decimal value between 0 and 1. For example, for a desired false positive rate of 0.1% (1 in 1000),
-  /// error_rate should be set to 0.001.
-  ///
-  /// The default error_rate value is 0.01.
-  double error_rate;
-
-  /// The total number of bytes allocated for all sub-filters.
-  uint32_t bloom_bytes;
-
-  explicit BloomChainMetadata(bool generate_version = true) : Metadata(kRedisBloomFilter, generate_version) {}
-
-  void Encode(std::string *dst) const override;
-  using Metadata::Decode;
-  rocksdb::Status Decode(Slice *bytes) override;
-
-  uint32_t GetCapacity() const;
-
-  bool IsScaling() const { return expansion != 0; };
-};
-
-constexpr uint32_t kCuckooFilterDefaultPageSize = 2048;  // bytes
-
-class CuckooChainMetadata : public Metadata {
- public:
-  /// The number of sub-filters in the chain
-  uint16_t n_filters;
-
-  /// Expansion factor for new filters
-  /// When a filter is full, a new one is created with capacity = base_capacity * expansion^n
-  uint16_t expansion;
-
-  /// The capacity of the first filter.
-  uint64_t base_capacity;
-
-  /// Number of fingerprints per bucket
-  uint8_t bucket_size;
-
-  /// Maximum number of cuckoo kicks before considering filter full
-  uint16_t max_iterations;
-
-  /// Track number of deleted items for maintenance
-  uint64_t num_deleted_items;
-
-  /// Target maximum payload size for each persisted Cuckoo Filter page, in bytes
-  uint32_t page_size;
-
-  explicit CuckooChainMetadata(bool generate_version = true)
-      : Metadata(kRedisCuckooFilter, generate_version),
-        n_filters(0),
-        expansion(0),
-        base_capacity(0),
-        bucket_size(0),
-        max_iterations(0),
-        num_deleted_items(0),
-        page_size(kCuckooFilterDefaultPageSize) {}
-
-  void Encode(std::string *dst) const override;
-  using Metadata::Decode;
-  rocksdb::Status Decode(Slice *input) override;
-
-  uint64_t GetTotalCapacity() const;
-  bool IsScaling() const { return expansion > 0; }
-};
-
-enum class JsonStorageFormat : uint8_t {
-  JSON = 0,
-  CBOR = 1,
-};
-
-class JsonMetadata : public Metadata {
- public:
-  // to make JSON type more extensible,
-  // we add a field to indicate the format of stored data
-  JsonStorageFormat format = JsonStorageFormat::JSON;
-
-  explicit JsonMetadata(bool generate_version = true) : Metadata(kRedisJson, generate_version) {}
-
-  void Encode(std::string *dst) const override;
-  rocksdb::Status Decode(Slice *input) override;
-};
-
-class HyperLogLogMetadata : public Metadata {
- public:
-  enum class EncodeType : uint8_t {
-    // Redis-style dense encoding implement as bitmap like sub keys to
-    // store registers by segment in data column family.
-    // The registers are stored in 6-bit format and each segment contains
-    // 768 registers.
-    DENSE = 0,
-    // TODO(mwish): sparse encoding
-    // SPARSE = 1,
-  };
-
-  explicit HyperLogLogMetadata(bool generate_version = true) : Metadata(kRedisHyperLogLog, generate_version) {}
-
-  void Encode(std::string *dst) const override;
-  rocksdb::Status Decode(Slice *input) override;
-
-  EncodeType encode_type = EncodeType::DENSE;
-};
-
-class TDigestMetadata : public Metadata {
- public:
-  uint32_t compression;
-  uint32_t capacity;
-  uint64_t unmerged_nodes = 0;
-  uint64_t merged_nodes = 0;
-  uint64_t total_weight = 0;
-  uint64_t merged_weight = 0;
-  double minimum = std::numeric_limits<double>::max();
-  double maximum = std::numeric_limits<double>::lowest();
-  uint64_t total_observations = 0;  // reserved for TDIGEST.INFO command
-  uint64_t merge_times = 0;         // reserved for TDIGEST.INFO command
-
-  explicit TDigestMetadata(uint32_t compression, uint32_t capacity, bool generate_version = true)
-      : Metadata(kRedisTDigest, generate_version), compression(compression), capacity(capacity) {}
-  explicit TDigestMetadata(bool generate_version = true) : TDigestMetadata(0, 0, generate_version) {}
-  void Encode(std::string *dst) const override;
-  rocksdb::Status Decode(Slice *input) override;
-
-  uint64_t TotalNodes() const { return merged_nodes + unmerged_nodes; }
-
-  double Delta() const { return 1. / static_cast<double>(compression); }
-};
-
-class TimeSeriesMetadata : public Metadata {
- public:
-  enum class ChunkType : uint8_t {
-    UNCOMPRESSED = 0,
-    COMPRESSED = 1,
-  };
-
-  enum class DuplicatePolicy : uint8_t {
-    BLOCK = 0,
-    FIRST = 1,
-    LAST = 2,
-    MIN = 3,
-    MAX = 4,
-    SUM = 5,
-  };
-
-  uint64_t retention_time;
-  uint64_t chunk_size;
-  ChunkType chunk_type;
-  DuplicatePolicy duplicate_policy;
-  std::string source_key;
-  uint64_t last_timestamp = 0;  // Approximate last timestamp, used for compaction filter
-
-  explicit TimeSeriesMetadata(bool generate_version = true)
-      : Metadata(kRedisTimeSeries, generate_version),
-        retention_time(0),
-        chunk_size(0),
-        chunk_type(ChunkType::UNCOMPRESSED),
-        duplicate_policy(DuplicatePolicy::BLOCK) {}
-  TimeSeriesMetadata(uint64_t retention_time, uint64_t chunk_size, ChunkType chunk_type,
-                     DuplicatePolicy duplicate_policy, bool generate_version = true)
-      : Metadata(kRedisTimeSeries, generate_version),
-        retention_time(retention_time),
-        chunk_size(chunk_size),
-        chunk_type(chunk_type),
-        duplicate_policy(duplicate_policy) {}
-
-  void SetSourceKey(Slice key);
-
-  void Encode(std::string *dst) const override;
-  rocksdb::Status Decode(Slice *input) override;
 };

@@ -34,10 +34,11 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "cluster/cluster_defs.h"
+#include "cluster/redis_slot.h"
 #include "config/config.h"
 #include "error_constants.h"
 #include "logging.h"
@@ -463,6 +464,8 @@ struct CommandTable {
   static CommandMap *Get();
   static const CommandMap *GetOriginal();
   static void Reset();
+  static void EnableXRocksCacheProfile();
+  static bool IsDisabledByProfile(const std::string &name);
 
   static void GetAllCommandsInfo(std::string *info);
   static void GetCommandsInfo(std::string *info, const std::vector<std::string> &cmd_names);
@@ -484,15 +487,18 @@ struct CommandTable {
   // Command table after rename-command directive
   static inline CommandMap commands;
 
+  // Commands removed from the active table by the XRocksCache profile.
+  static inline std::unordered_set<std::string> profile_disabled_commands;
+
   friend struct RegisterToCommandTable;
 };
 
-#define KVROCKS_CONCAT(a, b) a##b                   // NOLINT
-#define KVROCKS_CONCAT2(a, b) KVROCKS_CONCAT(a, b)  // NOLINT
+#define XROCKSCACHE_CONCAT(a, b) a##b                              // NOLINT
+#define XROCKSCACHE_CONCAT2(a, b) XROCKSCACHE_CONCAT(a, b)          // NOLINT
 
 // NOLINTNEXTLINE
 #define REDIS_REGISTER_COMMANDS(cat, ...)                                                                   \
-  static RegisterToCommandTable KVROCKS_CONCAT2(register_to_command_table_, __LINE__)(CommandCategory::cat, \
-                                                                                      {__VA_ARGS__});
+  static RegisterToCommandTable XROCKSCACHE_CONCAT2(register_to_command_table_, __LINE__)(CommandCategory::cat, \
+                                                                                          {__VA_ARGS__});
 
 }  // namespace redis

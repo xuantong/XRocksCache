@@ -88,7 +88,7 @@ class BlockingCommander : public Commander,
       // because it might have the data race when the server is in transaction mode and run
       // the callback here might cause the current execution also in transaction mode.
       //
-      // For more context, please refer to: https://github.com/apache/kvrocks/issues/2900
+      // Keep the waiter alive only while the connection is still valid.
       auto concurrency = conn_->GetServer()->WorkConcurrencyGuard();
 
       auto guard = GetLocks();
@@ -114,7 +114,7 @@ class BlockingCommander : public Commander,
     bufferevent_enable(bev, EV_READ);
     // We need to manually trigger the read event since we will stop processing commands
     // in connection after the blocking command, so there may have some commands to be processed.
-    // Related issue: https://github.com/apache/kvrocks/issues/831
+    // The waiter is removed after wake-up or timeout.
     bufferevent_trigger(bev, EV_READ, BEV_TRIG_IGNORE_WATERMARKS);
   }
 

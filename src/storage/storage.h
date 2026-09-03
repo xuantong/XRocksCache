@@ -25,7 +25,6 @@
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/table.h>
-#include <rocksdb/utilities/backup_engine.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 
 #include <atomic>
@@ -53,36 +52,16 @@ enum class StorageEngineType : uint16_t {
   RocksDB,
 };
 
-inline constexpr StorageEngineType STORAGE_ENGINE_TYPE = StorageEngineType::KVROCKS_STORAGE_ENGINE;
-
-const int kReplIdLength = 16;
-
-enum DBOpenMode {
-  kDBOpenModeDefault,
-  kDBOpenModeForReadOnly,
-  kDBOpenModeAsSecondaryInstance,
-};
+inline constexpr StorageEngineType STORAGE_ENGINE_TYPE = StorageEngineType::XROCKSCACHE_STORAGE_ENGINE;
 
 enum class ColumnFamilyID : uint32_t {
   PrimarySubkey = 0,
   Metadata,
-  SecondarySubkey,
-  PubSub,
-  Propagate,
-  Stream,
-  Search,
-  Index,
 };
 
-constexpr uint32_t kMaxColumnFamilyID = static_cast<uint32_t>(ColumnFamilyID::Index);
+constexpr uint32_t kMaxColumnFamilyID = static_cast<uint32_t>(ColumnFamilyID::Metadata);
 
 namespace engine {
-
-constexpr const char *kPropagateScriptCommand = "script";
-
-constexpr const char *kLuaFuncSHAPrefix = "lua_f_";
-constexpr const char *kLuaFuncLibPrefix = "lua_func_lib_";
-constexpr const char *kLuaLibCodePrefix = "lua_lib_code_";
 
 struct CompressionOption {
   rocksdb::CompressionType type;
@@ -144,55 +123,21 @@ class ColumnFamilyConfig {
 
 constexpr const std::string_view kPrimarySubkeyColumnFamilyName = "default";
 constexpr const std::string_view kMetadataColumnFamilyName = "metadata";
-constexpr const std::string_view kSecondarySubkeyColumnFamilyName = "zset_score";
-constexpr const std::string_view kPubSubColumnFamilyName = "pubsub";
-constexpr const std::string_view kPropagateColumnFamilyName = "propagate";
-constexpr const std::string_view kStreamColumnFamilyName = "stream";
-constexpr const std::string_view kSearchColumnFamilyName = "search";
-constexpr const std::string_view kIndexColumnFamilyName = "index";
 
 class ColumnFamilyConfigs {
  public:
-  /// DefaultSubkeyColumnFamily is the default column family in rocksdb.
-  /// In kvrocks, we use it to store the data if metadata is not enough.
+  /// DefaultSubkeyColumnFamily is the default column family in RocksDB.
+  /// XRocksCache keeps it for internal compatibility and future subkey-free extensions.
   static ColumnFamilyConfig PrimarySubkeyColumnFamily() {
     return {ColumnFamilyID::PrimarySubkey, kPrimarySubkeyColumnFamilyName, /*is_minor=*/false};
   }
 
-  /// MetadataColumnFamily stores the metadata of data-structures.
+  /// MetadataColumnFamily stores key metadata and single-value payloads.
   static ColumnFamilyConfig MetadataColumnFamily() {
     return {ColumnFamilyID::Metadata, kMetadataColumnFamilyName, /*is_minor=*/false};
   }
 
-  /// SecondarySubkeyColumnFamily stores the score of zset or other secondary subkey.
-  /// See https://kvrocks.apache.org/community/data-structure-on-rocksdb#zset for more details.
-  static ColumnFamilyConfig SecondarySubkeyColumnFamily() {
-    return {ColumnFamilyID::SecondarySubkey, kSecondarySubkeyColumnFamilyName,
-            /*is_minor=*/true};
-  }
-
-  /// PubSubColumnFamily stores the pubsub data.
-  static ColumnFamilyConfig PubSubColumnFamily() {
-    return {ColumnFamilyID::PubSub, kPubSubColumnFamilyName, /*is_minor=*/true};
-  }
-
-  static ColumnFamilyConfig PropagateColumnFamily() {
-    return {ColumnFamilyID::Propagate, kPropagateColumnFamilyName, /*is_minor=*/true};
-  }
-
-  static ColumnFamilyConfig StreamColumnFamily() {
-    return {ColumnFamilyID::Stream, kStreamColumnFamilyName, /*is_minor=*/true};
-  }
-
-  static ColumnFamilyConfig SearchColumnFamily() {
-    return {ColumnFamilyID::Search, kSearchColumnFamilyName, /*is_minor=*/true};
-  }
-
-  static ColumnFamilyConfig IndexColumnFamily() {
-    return {ColumnFamilyID::Index, kIndexColumnFamilyName, /*is_minor=*/true};
-  }
-
-  /// ListAllColumnFamilies returns all column families in kvrocks.
+  /// ListAllColumnFamilies returns all column families used by XRocksCache.
   static const std::vector<ColumnFamilyConfig> &ListAllColumnFamilies() { return AllCfs; }
 
   static const std::vector<ColumnFamilyConfig> &ListColumnFamiliesWithoutDefault() { return AllCfsWithoutDefault; }
@@ -202,12 +147,11 @@ class ColumnFamilyConfigs {
  private:
   // Caution: don't change the order of column family, or the handle will be mismatched
   inline const static std::vector<ColumnFamilyConfig> AllCfs = {
-      PrimarySubkeyColumnFamily(), MetadataColumnFamily(), SecondarySubkeyColumnFamily(), PubSubColumnFamily(),
-      PropagateColumnFamily(),     StreamColumnFamily(),   SearchColumnFamily(),          IndexColumnFamily(),
+      PrimarySubkeyColumnFamily(),
+      MetadataColumnFamily(),
   };
   inline const static std::vector<ColumnFamilyConfig> AllCfsWithoutDefault = {
-      MetadataColumnFamily(), SecondarySubkeyColumnFamily(), PubSubColumnFamily(), PropagateColumnFamily(),
-      StreamColumnFamily(),   SearchColumnFamily(),          IndexColumnFamily(),
+      MetadataColumnFamily(),
   };
 };
 
@@ -219,11 +163,9 @@ class Storage {
   ~Storage();
 
   void SetWriteOptions(const Config::RocksDB::WriteOptions &config);
-  Status Open(DBOpenMode mode = kDBOpenModeDefault);
+  Status Open();
   void CloseDB();
   void TrySkipBlockCacheDeallocationOnClose();
-  bool IsEmptyDB();
-  void EmptyDB();
   rocksdb::BlockBasedTableOptions InitTableOptions();
   void SetBlobDB(rocksdb::ColumnFamilyOptions *cf_options);
   rocksdb::Options InitRocksDBOptions();
@@ -235,12 +177,6 @@ class Storage {
   // but can't promise it's the latest sequence number. So you must check it by yourself before
   // using it.
   Status CreateBackup(uint64_t *sequence_number = nullptr);
-  void DestroyBackup();
-  Status RestoreFromBackup();
-  Status RestoreFromCheckpoint();
-  Status GetWALIter(rocksdb::SequenceNumber seq, std::unique_ptr<rocksdb::TransactionLogIterator> *iter);
-  Status ReplicaApplyWriteBatch(rocksdb::WriteBatch *batch, const rocksdb::WriteOptions &options);
-  Status ApplyWriteBatch(const rocksdb::WriteOptions &options, std::string &&raw_batch);
   rocksdb::SequenceNumber LatestSeqNumber();
   Status SyncWAL();
 
@@ -271,18 +207,11 @@ class Storage {
   [[nodiscard]] rocksdb::Status DeleteRange(engine::Context &ctx, const rocksdb::WriteOptions &options,
                                             rocksdb::ColumnFamilyHandle *cf_handle, Slice begin, Slice end);
   [[nodiscard]] rocksdb::Status DeleteRange(engine::Context &ctx, Slice begin, Slice end);
-  [[nodiscard]] rocksdb::Status FlushScripts(engine::Context &ctx, const rocksdb::WriteOptions &options,
-                                             rocksdb::ColumnFamilyHandle *cf_handle);
-  bool WALHasNewData(rocksdb::SequenceNumber seq) { return seq <= LatestSeqNumber(); }
-  Status InWALBoundary(rocksdb::SequenceNumber seq);
-  Status WriteToPropagateCF(engine::Context &ctx, const std::string &key, const std::string &value);
 
   [[nodiscard]] rocksdb::Status Compact(rocksdb::ColumnFamilyHandle *cf, const rocksdb::Slice *begin,
                                         const rocksdb::Slice *end);
   [[nodiscard]] rocksdb::Status FlushMemTable(rocksdb::ColumnFamilyHandle *cf_handle,
                                               const rocksdb::FlushOptions &options);
-  [[nodiscard]] StatusOr<int> IngestSST(const std::string &folder,
-                                        const rocksdb::IngestExternalFileOptions &ingest_options);
   void FlushBlockCache();
 
   rocksdb::DB *GetDB();
@@ -317,67 +246,17 @@ class Storage {
   Storage &operator=(const Storage &) = delete;
 
   int GetWriteBatchMaxBytes() const { return config_->rocks_db.write_options.write_batch_max_bytes; }
-  // Full replication data files manager
-  class ReplDataManager {
-   public:
-    static Status ValidateReplFileName(const std::string &repl_file);
 
-    // Master side
-    static Status GetFullReplDataInfo(Storage *storage, std::string *files);
-    static int OpenDataFile(Storage *storage, const std::string &rel_file, uint64_t *file_size);
-    static Status CleanInvalidFiles(Storage *storage, const std::string &dir, std::vector<std::string> valid_files);
-    struct CheckpointInfo {
-      // System clock time when the checkpoint was created.
-      std::atomic<int64_t> create_time_secs = 0;
-      // System clock time when the checkpoint was last accessed.
-      std::atomic<int64_t> access_time_secs = 0;
-      uint64_t latest_seq = 0;
-    };
-
-    // Slave side
-    struct MetaInfo {
-      int64_t timestamp;
-      rocksdb::SequenceNumber seq;
-      std::string meta_data;
-      // [[filename, checksum]...]
-      std::vector<std::pair<std::string, uint32_t>> files;
-    };
-    static Status ParseMetaAndSave(Storage *storage, rocksdb::BackupID meta_id, evbuffer *evbuf,
-                                   Storage::ReplDataManager::MetaInfo *meta);
-    static std::unique_ptr<rocksdb::WritableFile> NewTmpFile(Storage *storage, const std::string &dir,
-                                                             const std::string &repl_file);
-    static Status SwapTmpFile(Storage *storage, const std::string &dir, const std::string &repl_file);
-    static bool FileExists(Storage *storage, const std::string &dir, const std::string &repl_file, uint32_t crc);
-  };
-
-  bool ExistCheckpoint();
-  bool ExistSyncCheckpoint();
-  // Rename checkpoint to "*.trash" under checkpoint_mu_, then DestroyDB outside the lock.
-  Status TryPurgeCheckpoint(int fetch_file_threads);
-  int64_t GetCheckpointCreateTimeSecs() const { return checkpoint_info_.create_time_secs; }
-  void SetCheckpointAccessTimeSecs(int64_t t) { checkpoint_info_.access_time_secs = t; }
-  int64_t GetCheckpointAccessTimeSecs() const { return checkpoint_info_.access_time_secs; }
   void SetDBInRetryableIOError(bool yes_or_no) { db_in_retryable_io_error_ = yes_or_no; }
   bool IsDBInRetryableIOError() const { return db_in_retryable_io_error_; }
 
-  /// Redis PSYNC relies on a Unique Replication Sequence Id when use-rsid-psync
-  /// enabled.
-  /// ShiftReplId would generate an Id and write it to propagate cf.
-  Status ShiftReplId(engine::Context &ctx);
-  std::string GetReplIdFromWalBySeq(rocksdb::SequenceNumber seq);
-  std::string GetReplIdFromDbEngine();
-
  private:
   std::unique_ptr<rocksdb::DB> db_ = nullptr;
-  std::string replid_;
   // The system clock time when the backup was created.
   int64_t backup_creating_time_secs_;
-  std::unique_ptr<rocksdb::BackupEngine> backup_ = nullptr;
   rocksdb::Env *env_;
   std::shared_ptr<rocksdb::SstFileManager> sst_file_manager_;
   std::shared_ptr<rocksdb::RateLimiter> rate_limiter_;
-  ReplDataManager::CheckpointInfo checkpoint_info_;
-  std::mutex checkpoint_mu_;
   Config *config_ = nullptr;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   LockManager lock_mgr_;

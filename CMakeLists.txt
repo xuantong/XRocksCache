@@ -16,8 +16,8 @@
 # under the License.
 
 cmake_minimum_required(VERSION 3.16)
-project(kvrocks
-        DESCRIPTION "NoSQL which is based on RocksDB and compatible with the Redis protocol"
+project(xrockscache
+        DESCRIPTION "Lightweight Redis-compatible RocksDB cache"
         LANGUAGES C CXX)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
@@ -27,8 +27,7 @@ option(ENABLE_ASAN "enable address sanitizer" OFF)
 option(ENABLE_TSAN "enable thread sanitizer" OFF)
 option(ENABLE_UBSAN "enable undefined behavior sanitizer" OFF)
 option(ASAN_WITH_LSAN "enable leak sanitizer while address sanitizer is enabled" ON)
-option(ENABLE_STATIC_LIBSTDCXX "link kvrocks with static library of libstd++ instead of shared library" ON)
-option(ENABLE_LUAJIT "enable use of luaJIT instead of lua" ON)
+option(ENABLE_STATIC_LIBSTDCXX "link XRocksCache with static library of libstd++ instead of shared library" ON)
 option(ENABLE_OPENSSL "enable openssl to support tls connection" OFF)
 option(ENABLE_LTO "enable link-time optimization" OFF)
 set(SYMBOLIZE_BACKEND "" CACHE STRING "symbolization backend library for cpptrace (libbacktrace, libdwarf, or empty)")
@@ -41,15 +40,15 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
-        message(FATAL_ERROR "It is expected to build kvrocks with GCC 11 or above")
+        message(FATAL_ERROR "It is expected to build XRocksCache with GCC 11 or above")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 12)
-        message(FATAL_ERROR "It is expected to build kvrocks with Clang 12 or above")
+        message(FATAL_ERROR "It is expected to build XRocksCache with Clang 12 or above")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
-        message(FATAL_ERROR "It is expected to build kvrocks with Xcode toolchains 13 or above")
+        message(FATAL_ERROR "It is expected to build XRocksCache with Xcode toolchains 13 or above")
     endif()
 else()
     message(WARNING "The compiler you are currently using is not officially supported,
@@ -170,7 +169,6 @@ if(APPLE AND NOT CMAKE_OSX_SYSROOT)
   endif()
 endif()
 
-include(cmake/gtest.cmake)
 include(cmake/snappy.cmake)
 include(cmake/lz4.cmake)
 include(cmake/zlib.cmake)
@@ -184,16 +182,7 @@ include(cmake/spdlog.cmake)
 include(cmake/jsoncons.cmake)
 include(cmake/xxhash.cmake)
 include(cmake/span.cmake)
-include(cmake/trie.cmake)
-include(cmake/pegtl.cmake)
-include(cmake/rangev3.cmake)
 include(cmake/cpptrace.cmake)
-
-if (ENABLE_LUAJIT)
-    include(cmake/luajit.cmake)
-else()
-    include(cmake/lua.cmake)
-endif()
 
 find_package(Threads REQUIRED)
 
@@ -206,11 +195,6 @@ list(APPEND EXTERNAL_LIBS zlib_with_headers)
 list(APPEND EXTERNAL_LIBS fmt)
 list(APPEND EXTERNAL_LIBS fast_float)
 list(APPEND EXTERNAL_LIBS spdlog)
-if (ENABLE_LUAJIT)
-    list(APPEND EXTERNAL_LIBS luajit)
-else()
-    list(APPEND EXTERNAL_LIBS lua)
-endif()
 if (ENABLE_OPENSSL)
     list(APPEND EXTERNAL_LIBS OpenSSL::SSL)
 endif()
@@ -220,9 +204,6 @@ list(APPEND EXTERNAL_LIBS Threads::Threads)
 list(APPEND EXTERNAL_LIBS ${Backtrace_LIBRARY})
 list(APPEND EXTERNAL_LIBS xxhash)
 list(APPEND EXTERNAL_LIBS span-lite)
-list(APPEND EXTERNAL_LIBS tsl_hat_trie)
-list(APPEND EXTERNAL_LIBS pegtl)
-list(APPEND EXTERNAL_LIBS range-v3)
 list(APPEND EXTERNAL_LIBS cpptrace::cpptrace)
 
 # Add git sha to version.h
@@ -254,42 +235,42 @@ if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "C
     endif()
 endif()
 
-# kvrocks objects target
-file(GLOB_RECURSE KVROCKS_SRCS src/*.cc)
-list(FILTER KVROCKS_SRCS EXCLUDE REGEX src/cli/main.cc)
+# XRocksCache server objects
+file(GLOB_RECURSE XROCKSCACHE_SRCS src/*.cc)
+list(FILTER XROCKSCACHE_SRCS EXCLUDE REGEX src/cli/main.cc)
 
-add_library(kvrocks_objs OBJECT ${KVROCKS_SRCS})
+add_library(xrockscache_objs OBJECT ${XROCKSCACHE_SRCS})
 
-target_include_directories(kvrocks_objs PUBLIC src src/common src/vendor ${PROJECT_BINARY_DIR} ${Backtrace_INCLUDE_DIR})
-target_compile_features(kvrocks_objs PUBLIC cxx_std_17)
-target_compile_options(kvrocks_objs PUBLIC -Wall -Wpedantic -Wsign-compare -Wreturn-type -fno-omit-frame-pointer)
-target_compile_options(kvrocks_objs PUBLIC -Werror=unused-parameter)
-target_compile_options(kvrocks_objs PUBLIC -Werror=unused-result)
-target_compile_definitions(kvrocks_objs PUBLIC span_CONFIG_SELECT_SPAN=1)
+target_include_directories(xrockscache_objs PUBLIC src src/common src/vendor ${PROJECT_BINARY_DIR} ${Backtrace_INCLUDE_DIR})
+target_compile_features(xrockscache_objs PUBLIC cxx_std_17)
+target_compile_options(xrockscache_objs PUBLIC -Wall -Wpedantic -Wsign-compare -Wreturn-type -fno-omit-frame-pointer)
+target_compile_options(xrockscache_objs PUBLIC -Werror=unused-parameter)
+target_compile_options(xrockscache_objs PUBLIC -Werror=unused-result)
+target_compile_definitions(xrockscache_objs PUBLIC span_CONFIG_SELECT_SPAN=1)
 
 # disable unused-variable check on GCC < 8 due to the structure bindings
 # https://gcc.gnu.org/bugzilla/show_bug.cgi?format=multiple&id=81767
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8)
-    target_compile_options(kvrocks_objs PUBLIC -Wno-error=unused-variable)
+    target_compile_options(xrockscache_objs PUBLIC -Wno-error=unused-variable)
 else()
-    target_compile_options(kvrocks_objs PUBLIC -Werror=unused-variable)
+    target_compile_options(xrockscache_objs PUBLIC -Werror=unused-variable)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(kvrocks_objs PUBLIC -Wno-pedantic)
+    target_compile_options(xrockscache_objs PUBLIC -Wno-pedantic)
 elseif((CMAKE_CXX_COMPILER_ID STREQUAL "Clang") OR (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang"))
-    target_compile_options(kvrocks_objs PUBLIC -Wno-gnu-statement-expression)
+    target_compile_options(xrockscache_objs PUBLIC -Wno-gnu-statement-expression)
 endif()
-target_link_libraries(kvrocks_objs PUBLIC -fno-omit-frame-pointer)
-target_link_libraries(kvrocks_objs PUBLIC ${EXTERNAL_LIBS})
-target_compile_definitions(kvrocks_objs PUBLIC KVROCKS_STORAGE_ENGINE=RocksDB)
+target_link_libraries(xrockscache_objs PUBLIC -fno-omit-frame-pointer)
+target_link_libraries(xrockscache_objs PUBLIC ${EXTERNAL_LIBS})
+target_compile_definitions(xrockscache_objs PUBLIC XROCKSCACHE_STORAGE_ENGINE=RocksDB)
 if(ENABLE_OPENSSL)
-    target_compile_definitions(kvrocks_objs PUBLIC ENABLE_OPENSSL)
+    target_compile_definitions(xrockscache_objs PUBLIC ENABLE_OPENSSL)
 endif()
 if(ENABLE_NEW_ENCODING)
-    target_compile_definitions(kvrocks_objs PUBLIC METADATA_ENCODING_VERSION=1)
+    target_compile_definitions(xrockscache_objs PUBLIC METADATA_ENCODING_VERSION=1)
 else()
-    target_compile_definitions(kvrocks_objs PUBLIC METADATA_ENCODING_VERSION=0)
+    target_compile_definitions(xrockscache_objs PUBLIC METADATA_ENCODING_VERSION=0)
 endif()
 
 if(ENABLE_LTO)
@@ -297,28 +278,15 @@ if(ENABLE_LTO)
     check_ipo_supported(RESULT ipo_result OUTPUT ipo_output LANGUAGES CXX)
 
     if(ipo_result)
-        set_property(TARGET kvrocks_objs PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set_property(TARGET xrockscache_objs PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-            target_link_libraries(kvrocks_objs PUBLIC "-fuse-ld=lld")
+            target_link_libraries(xrockscache_objs PUBLIC "-fuse-ld=lld")
         endif()
     else()
         message(WARNING "LTO is not supported: ${ipo_output}")
     endif()
 endif()
 
-# kvrocks main target
-add_executable(kvrocks src/cli/main.cc)
-target_link_libraries(kvrocks PRIVATE kvrocks_objs ${EXTERNAL_LIBS})
-
-# kvrocks2redis sync tool
-file(GLOB KVROCKS2REDIS_SRCS utils/kvrocks2redis/*.cc)
-add_executable(kvrocks2redis ${KVROCKS2REDIS_SRCS})
-
-target_link_libraries(kvrocks2redis PRIVATE kvrocks_objs ${EXTERNAL_LIBS})
-
-# kvrocks unit tests
-file(GLOB_RECURSE TESTS_SRCS tests/cppunit/*.cc)
-add_executable(unittest ${TESTS_SRCS})
-target_include_directories(unittest PRIVATE tests/cppunit)
-
-target_link_libraries(unittest PRIVATE kvrocks_objs gtest_main gmock ${EXTERNAL_LIBS})
+# XRocksCache main target
+add_executable(xrockscache src/cli/main.cc)
+target_link_libraries(xrockscache PRIVATE xrockscache_objs ${EXTERNAL_LIBS})

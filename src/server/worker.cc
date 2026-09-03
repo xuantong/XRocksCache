@@ -52,8 +52,6 @@
 #include "redis_connection.h"
 #include "redis_request.h"
 #include "server.h"
-#include "storage/scripting.h"
-
 Worker::Worker(Server *srv, Config *config) : srv(srv), base_(event_base_new()) {
   if (!base_) throw std::runtime_error{"event base failed to be created"};
 
@@ -79,7 +77,6 @@ Worker::Worker(Server *srv, Config *config) : srv(srv), base_(event_base_new()) 
       }
     }
   }
-  lua_ = lua::CreateState();
 }
 
 Worker::~Worker() {
@@ -109,7 +106,6 @@ Worker::~Worker() {
     ev_token_bucket_cfg_free(rate_limit_group_cfg_);
   }
   event_base_free(base_);
-  lua::DestroyState(lua_);
 }
 
 void Worker::TimerCB(int, [[maybe_unused]] int16_t events) {
@@ -597,13 +593,6 @@ void Worker::KillClient(redis::Connection *self, uint64_t id, const std::string 
     }
   }
 }
-
-void Worker::LuaReset() {
-  auto lua = lua_.exchange(lua::CreateState());
-  lua::DestroyState(lua);
-}
-
-int64_t Worker::GetLuaMemorySize() { return (int64_t)lua_gc(lua_, LUA_GCCOUNT, 0) * 1024; }
 
 void Worker::KickoutIdleClients(int timeout) {
   std::vector<std::pair<int, uint64_t>> to_be_killed_conns;

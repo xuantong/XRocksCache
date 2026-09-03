@@ -69,10 +69,13 @@ constexpr const size_t KiB = 1024L;
 constexpr const size_t MiB = 1024L * KiB;
 constexpr const size_t GiB = 1024L * MiB;
 constexpr const uint32_t kDefaultPort = 6666;
+constexpr const size_t kXRocksCacheMaxKeyBytes = 512 * KiB;
+constexpr const size_t kXRocksCacheMaxValueBytes = 1 * MiB;
+constexpr const uint64_t kXRocksCacheMaxTTLMilliseconds = 15ULL * 24 * 60 * 60 * 1000;
 
 constexpr const char *kDefaultNamespace = "__namespace";
 constexpr const char *kDatabaseNamespacePrefix = "db";
-constexpr int KVROCKS_MAX_LSM_LEVEL = 7;
+constexpr int XROCKSCACHE_MAX_LSM_LEVEL = 7;
 
 constexpr const uint64_t kDefaultRocksdbTTL = UINT64_MAX - 1;
 constexpr const uint64_t kDefaultRocksdbPeriodicCompactionSeconds = UINT64_MAX - 1;
@@ -138,6 +141,14 @@ struct Config {
   spdlog::level::level_enum slowlog_dump_logfile_level = spdlog::level::off;
   uint64_t proto_max_bulk_len = 512 * 1024 * 1024;
   bool daemonize = false;
+  bool xrockscache_profile = false;
+
+  uint64_t ClampXRocksCacheExpireTime(uint64_t expire_ms, uint64_t now_ms) const {
+    if (!xrockscache_profile) return expire_ms;
+    const uint64_t max_expire_ms = now_ms + kXRocksCacheMaxTTLMilliseconds;
+    return expire_ms == 0 || expire_ms > max_expire_ms ? max_expire_ms : expire_ms;
+  }
+
   SupervisedMode supervised_mode = kSupervisedNone;
   bool slave_readonly = true;
   bool slave_serve_stale_data = true;
@@ -153,7 +164,6 @@ struct Config {
   int max_replication_mb = 0;
   int max_io_mb = 0;
   bool enable_blob_cache = false;
-  int max_bitmap_to_string_mb = 16;
   bool master_use_repl_port = false;
   bool purge_backup_on_fullsync = false;
   int fullsync_recv_file_delay = 0;
@@ -198,8 +208,6 @@ struct Config {
   int redis_databases = 0;
   bool resp3_enabled = false;
   int log_retention_days;
-  HashSubkeyEncodingMode hash_encoding_mode = HashSubkeyEncodingMode::kLegacy;
-  HashLengthMode hash_length_mode = HashLengthMode::kAccurate;
 
   // load_tokens is used to buffer the tokens when loading,
   // don't use it to authenticate or rewrite the configuration file.
@@ -211,10 +219,6 @@ struct Config {
   int profiling_sample_record_max_len = 128;
   std::set<std::string> profiling_sample_commands;
   bool profiling_sample_all_commands = false;
-
-  // json
-  int json_max_nesting_depth = 1024;
-  JsonStorageFormat json_storage_format = JsonStorageFormat::JSON;
 
   // Enable transactional mode in engine::Context
   bool txn_context_enabled = false;

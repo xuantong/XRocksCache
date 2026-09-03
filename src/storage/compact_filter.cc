@@ -24,48 +24,13 @@
 #include <utility>
 
 #include "db_util.h"
-#include "encoding.h"
 #include "logging.h"
-#include "search/search_encoding.h"
 #include "storage/redis_metadata.h"
 #include "time_util.h"
-#include "types/redis_bitmap.h"
-#include "types/redis_timeseries.h"
 
 namespace engine {
 
-using rocksdb::Slice;
-
-namespace {
-
-bool IsExpiredHashFieldSubkey(const HashMetadata &metadata, Slice value, uint64_t now, bool *expired) {
-  *expired = false;
-  if (!metadata.IsFieldExpirationEncoding()) {
-    return true;
-  }
-
-  uint64_t expire = 0;
-  auto s = metadata.DecodeSubkeyValue(&value, &expire);
-  if (!s.ok()) {
-    return false;
-  }
-
-  *expired = expire != 0 && expire < now;
-  return true;
-}
-
-bool HasHashFieldExpirationCandidates(const HashMetadata &metadata) {
-  return metadata.IsFieldExpirationEncoding() && metadata.size > metadata.persist;
-}
-
-bool IsHashFieldExpirationMetadataExpired(const HashMetadata &metadata, uint64_t now) {
-  return HasHashFieldExpirationCandidates(metadata) && metadata.persist == 0 && metadata.upper != 0 &&
-         metadata.upper < now;
-}
-
-}  // namespace
-
-bool MetadataFilter::Filter([[maybe_unused]] int level, const Slice &key, const Slice &value,
+bool MetadataFilter::Filter([[maybe_unused]] int level, const rocksdb::Slice &key, const rocksdb::Slice &value,
                             [[maybe_unused]] std::string *new_value, [[maybe_unused]] bool *modified) const {
   Metadata metadata(kRedisNone, false);
   rocksdb::Status s = metadata.Decode(value);
@@ -76,17 +41,6 @@ bool MetadataFilter::Filter([[maybe_unused]] int level, const Slice &key, const 
   }
 
   bool expired = metadata.Expired();
-  if (!expired && metadata.Type() == kRedisHash) {
-    HashMetadata hash_metadata(false);
-    Slice input(value);
-    if (s = hash_metadata.Decode(&input); !s.ok()) {
-      WARN("[compact_filter/metadata] Failed to decode hash metadata, namespace: {}, key: {}, err: {}", ns, user_key,
-           s.ToString());
-      return false;
-    }
-    expired = IsHashFieldExpirationMetadataExpired(hash_metadata, util::GetTimeStampMS());
-  }
-
   DEBUG("[compact_filter/metadata] namespace: {}, key: {}, result: {}", ns, user_key,
         (expired ? "deleted" : "reserved"));
   return expired;
@@ -94,7 +48,6 @@ bool MetadataFilter::Filter([[maybe_unused]] int level, const Slice &key, const 
 
 Status SubKeyFilter::GetMetadata(const InternalKey &ikey, Metadata *metadata) const {
   auto db = stor_->GetDB();
-  // storage close the would delete the column family handler and DB
   if (!db || stor_->GetCFHandles()->size() < 2) return {Status::NotOK, "storage is closed"};
   std::string metadata_key = ComposeNamespaceKey(ikey.GetNamespace(), ikey.GetKey(), stor_->IsSlotIdEncoded());
 
@@ -106,8 +59,6 @@ Status SubKeyFilter::GetMetadata(const InternalKey &ikey, Metadata *metadata) co
     if (s.ok()) {
       cached_metadata_ = std::move(bytes);
     } else if (s.IsNotFound()) {
-      // metadata was deleted (perhaps through compaction or manually)
-      // so here we clear the metadata
       cached_metadata_.clear();
       return {Status::NotFound, "metadata is not found"};
     } else {
@@ -116,9 +67,8 @@ Status SubKeyFilter::GetMetadata(const InternalKey &ikey, Metadata *metadata) co
       return {Status::NotOK, "fetch error: " + s.ToString()};
     }
   }
-  // the metadata was not found
+
   if (cached_metadata_.empty()) return {Status::NotFound, "metadata is not found"};
-  // the metadata is cached
   rocksdb::Status s = metadata->Decode(cached_metadata_);
   if (!s.ok()) {
     cached_key_.clear();
@@ -128,17 +78,13 @@ Status SubKeyFilter::GetMetadata(const InternalKey &ikey, Metadata *metadata) co
 }
 
 bool SubKeyFilter::IsMetadataExpired(const InternalKey &ikey, const Metadata &metadata) {
-  // lazy delete to avoid race condition between command Expire and subkey Compaction
-  // Related issue:https://github.com/apache/kvrocks/issues/1298
-  //
-  // `util::GetTimeStampMS() - 300000` means extending 5 minutes for expired items,
-  // to prevent them from being recycled once they reach the expiration time.
+  // Lazy delete gives writers a short safety window around EXPIRE/SET races.
   uint64_t lazy_expired_ts = util::GetTimeStampMS() - 300000;
-  return metadata.IsSingleKVType()  // metadata key was overwrite by set command
-         || metadata.ExpireAt(lazy_expired_ts) || ikey.GetVersion() != metadata.version;
+  return metadata.IsSingleKVType() || metadata.ExpireAt(lazy_expired_ts) || ikey.GetVersion() != metadata.version;
 }
 
-rocksdb::CompactionFilter::Decision SubKeyFilter::FilterBlobByKey([[maybe_unused]] int level, const Slice &key,
+rocksdb::CompactionFilter::Decision SubKeyFilter::FilterBlobByKey([[maybe_unused]] int level,
+                                                                  const rocksdb::Slice &key,
                                                                   [[maybe_unused]] std::string *new_value,
                                                                   [[maybe_unused]] std::string *skip_until) const {
   InternalKey ikey(key, stor_->IsSlotIdEncoded());
@@ -152,37 +98,14 @@ rocksdb::CompactionFilter::Decision SubKeyFilter::FilterBlobByKey([[maybe_unused
           ikey.GetKey(), s.Msg());
     return rocksdb::CompactionFilter::Decision::kKeep;
   }
-  // bitmap and timeseries will be checked in Filter
-  if (metadata.Type() == kRedisBitmap || metadata.Type() == kRedisTimeSeries) {
-    return rocksdb::CompactionFilter::Decision::kUndetermined;
-  }
-  if (metadata.Type() == kRedisHash) {
-    if (IsMetadataExpired(ikey, metadata)) {
-      return rocksdb::CompactionFilter::Decision::kRemove;
-    }
-
-    HashMetadata hash_metadata(false);
-    Slice input(cached_metadata_);
-    if (auto s = hash_metadata.Decode(&input); !s.ok()) {
-      ERROR("[compact_filter/subkey] Failed to decode hash metadata, namespace: {}, key: {}, err: {}",
-            ikey.GetNamespace(), ikey.GetKey(), s.ToString());
-      return rocksdb::CompactionFilter::Decision::kKeep;
-    }
-    if (IsHashFieldExpirationMetadataExpired(hash_metadata, util::GetTimeStampMS())) {
-      return rocksdb::CompactionFilter::Decision::kRemove;
-    }
-    if (HasHashFieldExpirationCandidates(hash_metadata)) {
-      return rocksdb::CompactionFilter::Decision::kUndetermined;
-    }
-    return rocksdb::CompactionFilter::Decision::kKeep;
-  }
 
   bool result = IsMetadataExpired(ikey, metadata);
   return result ? rocksdb::CompactionFilter::Decision::kRemove : rocksdb::CompactionFilter::Decision::kKeep;
 }
 
-bool SubKeyFilter::Filter([[maybe_unused]] int level, const Slice &key, const Slice &value,
-                          [[maybe_unused]] std::string *new_value, [[maybe_unused]] bool *modified) const {
+bool SubKeyFilter::Filter([[maybe_unused]] int level, const rocksdb::Slice &key,
+                          [[maybe_unused]] const rocksdb::Slice &value, [[maybe_unused]] std::string *new_value,
+                          [[maybe_unused]] bool *modified) const {
   InternalKey ikey(key, stor_->IsSlotIdEncoded());
   Metadata metadata(kRedisNone, false);
   Status s = GetMetadata(ikey, &metadata);
@@ -195,175 +118,7 @@ bool SubKeyFilter::Filter([[maybe_unused]] int level, const Slice &key, const Sl
     return false;
   }
 
-  if (metadata.Type() == kRedisTimeSeries) {
-    TimeSeriesMetadata ts_metadata(false);
-    Slice input(cached_metadata_);
-    auto s = ts_metadata.Decode(&input);
-    if (!s.ok()) {
-      ERROR("[compact_filter/subkey] Failed to decode timeseries metadata, namespace: {}, key: {}, err: {}",
-            ikey.GetNamespace(), ikey.GetKey(), s.ToString());
-      return false;
-    }
-    auto [ns, _] = ExtractNamespaceKey(key, stor_->IsSlotIdEncoded());
-    auto ts_db = redis::TimeSeries(stor_, ns.ToString());
-    bool expired = false;
-    s = ts_db.IsTSSubKeyExpired(ts_metadata, key, value, expired);
-    if (!s.ok()) {
-      ERROR("[compact_filter/subkey] Failed to check if timeseries subkey is expired, namespace: {}, key: {}, err: {}",
-            ikey.GetNamespace(), ikey.GetKey(), s.ToString());
-      return false;
-    }
-    return expired;
-  }
-
-  bool metadata_expired = IsMetadataExpired(ikey, metadata);
-  if (metadata_expired) {
-    return true;
-  }
-
-  if (metadata.Type() == kRedisHash) {
-    HashMetadata hash_metadata(false);
-    Slice input(cached_metadata_);
-    auto s = hash_metadata.Decode(&input);
-    if (!s.ok()) {
-      ERROR("[compact_filter/subkey] Failed to decode hash metadata, namespace: {}, key: {}, err: {}",
-            ikey.GetNamespace(), ikey.GetKey(), s.ToString());
-      return false;
-    }
-    auto now = util::GetTimeStampMS();
-    if (IsHashFieldExpirationMetadataExpired(hash_metadata, now)) {
-      return true;
-    }
-    if (!HasHashFieldExpirationCandidates(hash_metadata)) {
-      return false;
-    }
-
-    bool field_expired = false;
-    if (!IsExpiredHashFieldSubkey(hash_metadata, value, now, &field_expired)) {
-      ERROR("[compact_filter/subkey] Failed to decode hash subkey value, namespace: {}, key: {}", ikey.GetNamespace(),
-            ikey.GetKey());
-      return false;
-    }
-    return field_expired;
-  }
-
-  return metadata.Type() == kRedisBitmap && redis::Bitmap::IsEmptySegment(value);
-}
-
-bool SearchFilter::Filter([[maybe_unused]] int level, const Slice &key, [[maybe_unused]] const Slice &value,
-                          [[maybe_unused]] std::string *new_value, [[maybe_unused]] bool *modified) const {
-  auto db = stor_->GetDB();
-  // It would delete the column family handler and DB when closing.
-  if (!db || stor_->GetCFHandles()->size() < 2) return false;
-
-  auto [ns, rest_key] = ExtractNamespaceKey(key, false);
-  redis::SearchSubkeyType subkey_type = redis::SearchSubkeyType::INDEX_META;
-  if (!GetFixed8(&rest_key, (std::uint8_t *)&subkey_type)) return false;
-  if (subkey_type != redis::SearchSubkeyType::FIELD) return false;
-
-  Slice index_name;
-  if (!GetSizedString(&rest_key, &index_name)) return false;
-  Slice field_name;
-  if (!GetSizedString(&rest_key, &field_name)) return false;
-  auto field_meta_key =
-      redis::SearchKey(ns.ToStringView(), index_name.ToStringView(), field_name.ToStringView()).ConstructFieldMeta();
-
-  std::string field_meta_value;
-  auto s =
-      db->Get(rocksdb::ReadOptions(), stor_->GetCFHandle(ColumnFamilyID::Search), field_meta_key, &field_meta_value);
-  if (s.IsNotFound()) {
-    // metadata of this field is not found, so we can remove the field data
-    return true;
-  } else if (!s.ok()) {
-    ERROR("[compact_filter/search] Failed to get field metadata, namespace: {}, index: {}, field: {}, err: {}", ns,
-          index_name, field_name, s.ToString());
-    return false;
-  }
-
-  std::unique_ptr<redis::IndexFieldMetadata> field_meta;
-  Slice field_meta_slice(field_meta_value);
-  if (auto s = redis::IndexFieldMetadata::Decode(&field_meta_slice, field_meta); !s.ok()) {
-    ERROR("[compact_filter/search] Failed to decode field metadata, namespace: {}, index: {}, field: {}, err: {}", ns,
-          index_name, field_name, s.ToString());
-    return false;
-  }
-
-  Slice user_key;
-  if (field_meta->type == redis::IndexFieldType::TAG) {
-    Slice tag_value;
-    if (!GetSizedString(&rest_key, &tag_value)) return false;
-    if (!GetSizedString(&rest_key, &user_key)) return false;
-  } else if (field_meta->type == redis::IndexFieldType::NUMERIC) {
-    double numeric_value = 0;
-    if (!GetDouble(&rest_key, &numeric_value)) return false;
-    if (!GetSizedString(&rest_key, &user_key)) return false;
-  } else if (field_meta->type == redis::IndexFieldType::VECTOR) {
-    // TODO(twice): handle vector field
-    return false;
-  } else {
-    // unsupported field type, just keep it
-    return false;
-  }
-
-  auto ns_key = ComposeNamespaceKey(ns, user_key, stor_->IsSlotIdEncoded());
-  std::string metadata_value;
-  s = db->Get(rocksdb::ReadOptions(), stor_->GetCFHandle(ColumnFamilyID::Metadata), ns_key, &metadata_value);
-  if (s.IsNotFound()) {
-    // metadata of this key is not found, so we can remove the field data
-    return true;
-  } else if (!s.ok()) {
-    ERROR("[compact_filter/search] Failed to get metadata, namespace: {}, key: {}, err: {}", ns, user_key,
-          s.ToString());
-    return false;
-  }
-
-  Metadata metadata(kRedisNone, false);
-  if (auto s = metadata.Decode(metadata_value); !s.ok()) {
-    ERROR("[compact_filter/search] Failed to decode metadata, namespace: {}, key: {}, err: {}", ns, user_key,
-          s.ToString());
-  }
-
-  if (metadata.Expired()) {
-    // metadata is expired, so we can remove the field data
-    return true;  // NOLINT
-  }
-
-  return false;
-}
-
-bool IndexFilter::Filter([[maybe_unused]] int level, const Slice &key, [[maybe_unused]] const Slice &value,
-                         [[maybe_unused]] std::string *new_value, [[maybe_unused]] bool *modified) const {
-  auto db = stor_->GetDB();
-
-  auto index_key = redis::IndexInternalKey(key);
-  if (index_key.type != redis::IndexKeyType::TS_LABEL) {
-    // Only handle time series index for now
-    return false;
-  }
-  auto rev_key = redis::TSRevLabelKey(key);
-  auto ns = rev_key.ns;
-  auto user_key = rev_key.user_key;
-  auto ns_key = ComposeNamespaceKey(ns, user_key, stor_->IsSlotIdEncoded());
-  std::string metadata_value;
-  auto s = db->Get(rocksdb::ReadOptions(), stor_->GetCFHandle(ColumnFamilyID::Metadata), ns_key, &metadata_value);
-  if (s.IsNotFound()) {
-    // metadata of this key is not found, so we can remove the index
-    return true;
-  } else if (!s.ok()) {
-    ERROR("[compact_filter/index] Failed to get metadata, namespace: {}, key: {}, err: {}", ns, user_key, s.ToString());
-    return false;
-  }
-
-  Metadata metadata(kRedisNone, false);
-  if (auto s = metadata.Decode(metadata_value); !s.ok()) {
-    ERROR("[compact_filter/index] Failed to decode metadata, namespace: {}, key: {}, err: {}", ns, user_key,
-          s.ToString());
-  }
-
-  if (metadata.Expired()) {
-    return true;  // NOLINT
-  }
-  return false;
+  return IsMetadataExpired(ikey, metadata);
 }
 
 }  // namespace engine
