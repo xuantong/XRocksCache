@@ -34,6 +34,7 @@ BSD-3-Clause:
 MIT:
 - fmt: https://github.com/fmtlib/fmt
 - cpptrace: https://github.com/jeremy-rifkin/cpptrace
+- jsoncons: https://github.com/danielaparker/jsoncons
 - spdlog: https://github.com/gabime/spdlog
 
 Boost Software License Version 1.0:
