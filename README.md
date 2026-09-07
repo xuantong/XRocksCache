@@ -62,7 +62,7 @@ The current Go implementation does not try to clone full Redis or the previous C
 - Protocol: common Redis RESP2 commands
 - Commands: `GET`, `MGET`, `SET`, `MSET`, `DEL`, `EXISTS`, `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`, `INCR`, `DECR`, `INCRBY`, `DECRBY`, `PING`, `AUTH`, `INFO`, `DBSIZE`, `CLIENT`, `COMMAND`
 - Storage: standard-library append-only log file `xrockscache.aof` plus in-memory index
-- Logging: structured logs through Go standard-library `log/slog`, with `text` / `json` formats
+- Logging: structured logs through Go standard-library `log/slog`, with `text` / `json` formats; directory mode rotates daily and cleans old files by retention days
 - Limits: key <= 512KiB, value <= 1MiB, TTL <= 15 days
 - Dependencies: the current server and benchmark tool use only the Go standard library; the source tree keeps only the root Apache License 2.0 file
 
@@ -85,6 +85,19 @@ redis-cli -p 6666 PING
 redis-cli -p 6666 SET hello world EX 60
 redis-cli -p 6666 GET hello
 ```
+
+### Logging / 日志
+
+```conf
+log-dir stdout
+log-level info
+log-format text
+log-retention-days 15
+```
+
+中文：`log-dir stdout/stderr` 不做应用内轮转，适合容器、systemd 或云日志 Agent 接管。`log-dir <目录>` 时写入 `xrockscache-YYYY-MM-DD.log`，跨天自动切换，并删除超过 `log-retention-days` 的旧日志；`0` 表示不自动清理。
+
+English: `log-dir stdout/stderr` does not rotate inside the application and is suitable for containers, systemd, or cloud logging agents. With `log-dir <directory>`, logs are written to `xrockscache-YYYY-MM-DD.log`, rotated automatically at day boundaries, and old files beyond `log-retention-days` are removed; `0` disables automatic cleanup.
 
 ### Test
 

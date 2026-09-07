@@ -56,9 +56,10 @@ func main() {
 	}
 
 	logger, logCloser, err := logging.New(logging.Config{
-		Dir:    cfg.LogDir,
-		Level:  cfg.LogLevel,
-		Format: cfg.LogFormat,
+		Dir:           cfg.LogDir,
+		Level:         cfg.LogLevel,
+		Format:        cfg.LogFormat,
+		RetentionDays: cfg.LogRetentionDays,
 	})
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("init logger failed", "error", err)
@@ -75,6 +76,7 @@ func main() {
 		"log_dir", cfg.LogDir,
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
+		"log_retention_days", cfg.LogRetentionDays,
 	)
 
 	kv, err := store.Open(cfg.Dir)

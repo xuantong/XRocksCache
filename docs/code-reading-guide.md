@@ -10,7 +10,7 @@
 2. `internal/config/config.go`：解析 `xrockscache.conf`，兼容忽略旧配置中的无关字段。
 3. `internal/server/server.go`：TCP 监听、连接生命周期、认证状态。
 4. `internal/server/commands.go`：Redis RESP 命令分发和业务语义。
-5. `internal/logging/logging.go`：基于 `log/slog` 的结构化日志初始化。
+5. `internal/logging/logging.go`：基于 `log/slog` 的结构化日志初始化、按天切换和保留期清理。
 6. `internal/resp/resp.go`：RESP2 协议读写。
 7. `internal/store/store.go`：带 TTL 的内存索引和追加日志持久化。
 
@@ -28,7 +28,7 @@ Suggested reading order:
 2. `internal/config/config.go`: parses `xrockscache.conf` and ignores unrelated legacy fields.
 3. `internal/server/server.go`: TCP listener, connection lifecycle, and authentication state.
 4. `internal/server/commands.go`: Redis RESP command dispatch and business semantics.
-5. `internal/logging/logging.go`: structured logging initialization based on `log/slog`.
+5. `internal/logging/logging.go`: structured logging initialization, daily rotation, and retention cleanup based on `log/slog`.
 6. `internal/resp/resp.go`: RESP2 protocol reader and writer.
 7. `internal/store/store.go`: TTL-aware in-memory index plus append-only persistence.
 

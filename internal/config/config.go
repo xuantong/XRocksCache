@@ -10,29 +10,31 @@ import (
 )
 
 type Config struct {
-	Bind        string
-	Port        int
-	Dir         string
-	LogDir      string
-	LogLevel    string
-	LogFormat   string
-	RequirePass string
-	MaxClients  int
-	Workers     int
-	Profile     bool
+	Bind             string
+	Port             int
+	Dir              string
+	LogDir           string
+	LogLevel         string
+	LogFormat        string
+	LogRetentionDays int
+	RequirePass      string
+	MaxClients       int
+	Workers          int
+	Profile          bool
 }
 
 func Default() Config {
 	return Config{
-		Bind:       "127.0.0.1",
-		Port:       6666,
-		Dir:        "data",
-		LogDir:     "stdout",
-		LogLevel:   "info",
-		LogFormat:  "text",
-		MaxClients: 1024,
-		Workers:    2,
-		Profile:    true,
+		Bind:             "127.0.0.1",
+		Port:             6666,
+		Dir:              "data",
+		LogDir:           "stdout",
+		LogLevel:         "info",
+		LogFormat:        "text",
+		LogRetentionDays: 15,
+		MaxClients:       1024,
+		Workers:          2,
+		Profile:          true,
 	}
 }
 
@@ -86,6 +88,12 @@ func Load(path string) (Config, error) {
 			cfg.LogLevel = strings.ToLower(value)
 		case "log-format":
 			cfg.LogFormat = strings.ToLower(value)
+		case "log-retention-days":
+			v, err := strconv.Atoi(value)
+			if err != nil || v < 0 {
+				return cfg, fmt.Errorf("%s:%d: invalid log-retention-days", path, lineNo)
+			}
+			cfg.LogRetentionDays = v
 		case "requirepass":
 			cfg.RequirePass = value
 		case "maxclients":

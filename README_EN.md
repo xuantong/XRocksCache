@@ -3,7 +3,7 @@
 XRocksCache is a lightweight single-node K/V cache service rewritten in Go for low-cost 2C4G / 4C8G cloud servers. It keeps the most common Redis RESP string commands and enforces the product boundaries: maximum key size 512KiB, maximum value size 1MiB, and maximum write TTL 15 days.
 
 The current server and benchmark tool use only the Go standard library, so the source tree keeps only the root Apache License 2.0 file.
-Runtime logs use Go standard-library `log/slog` and can be emitted in `text` or `json` format.
+Runtime logs use Go standard-library `log/slog` and can be emitted in `text` or `json` format. With `log-dir <directory>`, logs rotate daily as `xrockscache-YYYY-MM-DD.log` and old files are cleaned by `log-retention-days`.
 
 Build:
 
