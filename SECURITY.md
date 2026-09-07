@@ -10,6 +10,7 @@ XRocksCache 当前定位为轻量级单机 K/V 缓存，默认应部署在可信
 - 生产环境必须设置 `requirepass`，或通过上游网关、私有网络、安全组限制访问。
 - 当前 Go 版数据文件默认不做应用层加密；如需静态数据保护，请使用云盘加密、文件系统加密或主机侧加密。
 - 当前版本不包含集群、复制、Lua、搜索、Pub/Sub 等高风险扩展面。
+- 当前运行时代码仅使用 Go 标准库，没有额外第三方运行时依赖面。
 
 漏洞反馈：
 
@@ -27,6 +28,7 @@ Security boundaries:
 - Production deployments must set `requirepass` or restrict access through an upstream gateway, private network, or security group.
 - The current Go data files are not encrypted by the application by default. Use cloud disk encryption, filesystem encryption, or host-level encryption when data-at-rest protection is required.
 - The current version does not include cluster, replication, Lua, search, Pub/Sub, or other high-risk extension surfaces.
+- The current runtime code uses only the Go standard library and has no extra third-party runtime dependency surface.
 
 Reporting vulnerabilities:
 

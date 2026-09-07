@@ -2,11 +2,11 @@ XRocksCache
 Copyright 2026 XRocksCache contributors
 
 中文：
-当前主干为 Go 语言重新实现版本。切换前的 C++ 精简版已保存在本地 Git tag `release_tag_cpp_baseline_20260907`。
-仓库历史中包含基于 Apache License 2.0 授权的软件及其派生代码；部分历史代码源自 Apache Kvrocks 项目，版权归 The Apache Software Foundation 及其贡献者所有。
-当前 Go 版运行时代码仅使用 Go 标准库，没有新增第三方运行时依赖。
+当前主干为 Go 语言重新实现版本，运行时代码与压测工具均只使用 Go 标准库。
+因此当前源码树只保留根目录 Apache License 2.0 许可证文件，不再保留旧 C++ 版本使用过的第三方依赖许可证目录。
+切换前的 C++ 精简版已保存在本地 Git tag `release_tag_cpp_baseline_20260907`；如需查看旧版本的第三方依赖声明，请检出该 tag。
 
 English:
-The current main branch is a Go rewrite. The minimal C++ baseline before the switch is preserved in the local Git tag `release_tag_cpp_baseline_20260907`.
-The repository history includes software and derivative code licensed under the Apache License 2.0; parts of the historical code are derived from the Apache Kvrocks project, copyright The Apache Software Foundation and its contributors.
-The current Go runtime code uses only the Go standard library and adds no third-party runtime dependency.
+The current main branch is a Go rewrite. Both the runtime code and benchmark tool use only the Go standard library.
+Therefore the current source tree keeps only the root Apache License 2.0 license file and no longer keeps the third-party dependency license directory used by the previous C++ version.
+The minimal C++ baseline before the switch is preserved in the local Git tag `release_tag_cpp_baseline_20260907`; check out that tag if you need the old third-party dependency notices.

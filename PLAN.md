@@ -21,6 +21,7 @@ XRocksCache 当前主干已经切换为 Go 实现。它是轻量级、单机、R
 4. 实现标准库追加日志 `xrockscache.aof` 与内存索引。
 5. 保留 `xrockscache` 二进制目标和 `xrockscache.conf` 配置入口。
 6. 更新 Docker、devcontainer、pre-push、README、安全文档和代码阅读指南。
+7. 删除旧 C++ 第三方依赖许可证目录，当前 Go 主干仅保留根目录 Apache License 2.0。
 
 ### V1 命令面
 
@@ -54,6 +55,7 @@ The current main branch of XRocksCache has been switched to Go. It is a lightwei
 4. Implemented standard-library append-only log `xrockscache.aof` plus in-memory index.
 5. Kept the `xrockscache` binary target and `xrockscache.conf` configuration entry.
 6. Updated Docker, devcontainer, pre-push, README, security docs, and code reading guide.
+7. Removed the previous C++ third-party dependency license directory; the current Go main branch keeps only the root Apache License 2.0 file.
 
 ### V1 command surface
 

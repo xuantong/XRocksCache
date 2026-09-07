@@ -15,6 +15,8 @@
 
 当前存储是标准库追加日志实现，目标是先保证 Go 版服务端可运行、可测试、可压测。后续如果需要更换存储后端，应把变更限制在 `internal/store` 或新增存储适配层中，不要污染命令层。
 
+当前主干服务端与压测工具均只使用 Go 标准库，因此不再保留旧 C++ 版本的第三方依赖许可证目录。
+
 ## English
 
 The main branch has been switched from C++ to Go. The minimal C++ baseline before the switch is preserved in `release_tag_cpp_baseline_20260907`.
@@ -29,3 +31,5 @@ Suggested reading order:
 6. `internal/store/store.go`: TTL-aware in-memory index plus append-only persistence.
 
 The current storage layer uses a standard-library append-only log so the Go server is runnable, testable, and benchmark-ready first. If the storage backend is replaced later, keep the change inside `internal/store` or a new storage adapter layer instead of leaking storage details into the command layer.
+
+The current server and benchmark tool use only the Go standard library, so the third-party dependency license directory from the previous C++ version is no longer kept.
