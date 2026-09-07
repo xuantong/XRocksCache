@@ -10,8 +10,9 @@
 2. `internal/config/config.go`：解析 `xrockscache.conf`，兼容忽略旧配置中的无关字段。
 3. `internal/server/server.go`：TCP 监听、连接生命周期、认证状态。
 4. `internal/server/commands.go`：Redis RESP 命令分发和业务语义。
-5. `internal/resp/resp.go`：RESP2 协议读写。
-6. `internal/store/store.go`：带 TTL 的内存索引和追加日志持久化。
+5. `internal/logging/logging.go`：基于 `log/slog` 的结构化日志初始化。
+6. `internal/resp/resp.go`：RESP2 协议读写。
+7. `internal/store/store.go`：带 TTL 的内存索引和追加日志持久化。
 
 当前存储是标准库追加日志实现，目标是先保证 Go 版服务端可运行、可测试、可压测。后续如果需要更换存储后端，应把变更限制在 `internal/store` 或新增存储适配层中，不要污染命令层。
 
@@ -27,8 +28,9 @@ Suggested reading order:
 2. `internal/config/config.go`: parses `xrockscache.conf` and ignores unrelated legacy fields.
 3. `internal/server/server.go`: TCP listener, connection lifecycle, and authentication state.
 4. `internal/server/commands.go`: Redis RESP command dispatch and business semantics.
-5. `internal/resp/resp.go`: RESP2 protocol reader and writer.
-6. `internal/store/store.go`: TTL-aware in-memory index plus append-only persistence.
+5. `internal/logging/logging.go`: structured logging initialization based on `log/slog`.
+6. `internal/resp/resp.go`: RESP2 protocol reader and writer.
+7. `internal/store/store.go`: TTL-aware in-memory index plus append-only persistence.
 
 The current storage layer uses a standard-library append-only log so the Go server is runnable, testable, and benchmark-ready first. If the storage backend is replaced later, keep the change inside `internal/store` or a new storage adapter layer instead of leaking storage details into the command layer.
 

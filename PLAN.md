@@ -22,6 +22,7 @@ XRocksCache 当前主干已经切换为 Go 实现。它是轻量级、单机、R
 5. 保留 `xrockscache` 二进制目标和 `xrockscache.conf` 配置入口。
 6. 更新 Docker、devcontainer、pre-push、README、安全文档和代码阅读指南。
 7. 删除旧 C++ 第三方依赖许可证目录，当前 Go 主干仅保留根目录 Apache License 2.0。
+8. 引入 Go 标准库 `log/slog` 作为结构化日志组件，替代服务端 `fmt.Printf` 日志输出。
 
 ### V1 命令面
 
@@ -56,6 +57,7 @@ The current main branch of XRocksCache has been switched to Go. It is a lightwei
 5. Kept the `xrockscache` binary target and `xrockscache.conf` configuration entry.
 6. Updated Docker, devcontainer, pre-push, README, security docs, and code reading guide.
 7. Removed the previous C++ third-party dependency license directory; the current Go main branch keeps only the root Apache License 2.0 file.
+8. Added Go standard-library `log/slog` as the structured logging component and removed server-side `fmt.Printf` logging.
 
 ### V1 command surface
 

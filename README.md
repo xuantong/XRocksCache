@@ -12,6 +12,7 @@ XRocksCache 是一个用 Go 重新实现的轻量级、单机 K/V 缓存服务�
 - 协议：Redis RESP2 常用命令
 - 命令：`GET`、`MGET`、`SET`、`MSET`、`DEL`、`EXISTS`、`EXPIRE`、`PEXPIRE`、`TTL`、`PTTL`、`INCR`、`DECR`、`INCRBY`、`DECRBY`、`PING`、`AUTH`、`INFO`、`DBSIZE`、`CLIENT`、`COMMAND`
 - 存储：标准库追加日志文件 `xrockscache.aof` + 内存索引
+- 日志：使用 Go 标准库 `log/slog` 输出结构化日志，支持 `text` / `json` 格式
 - 约束：key <= 512KiB，value <= 1MiB，TTL <= 15 天
 - 依赖：当前服务端与压测工具均只使用 Go 标准库，根目录仅保留 Apache License 2.0
 
@@ -61,6 +62,7 @@ The current Go implementation does not try to clone full Redis or the previous C
 - Protocol: common Redis RESP2 commands
 - Commands: `GET`, `MGET`, `SET`, `MSET`, `DEL`, `EXISTS`, `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`, `INCR`, `DECR`, `INCRBY`, `DECRBY`, `PING`, `AUTH`, `INFO`, `DBSIZE`, `CLIENT`, `COMMAND`
 - Storage: standard-library append-only log file `xrockscache.aof` plus in-memory index
+- Logging: structured logs through Go standard-library `log/slog`, with `text` / `json` formats
 - Limits: key <= 512KiB, value <= 1MiB, TTL <= 15 days
 - Dependencies: the current server and benchmark tool use only the Go standard library; the source tree keeps only the root Apache License 2.0 file
 

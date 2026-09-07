@@ -24,6 +24,7 @@ go test ./...
 - 用户文档保持中英文双语；代码标识符、命令、配置键保持英文。
 - 不要重新引入 C++、CMake 或旧存储源码树。
 - 存储层如果需要升级，应优先通过 `internal/store` 抽象扩展，不要影响 RESP 命令层。
+- 服务端日志必须使用 `internal/logging` / `log/slog`，不要用 `fmt.Printf` 打业务运行日志。
 - 修改命令协议或 TTL/大小限制后，必须补充或更新 Go 测试。
 
 ## English
@@ -50,4 +51,5 @@ go test ./...
 - Keep user-facing documents bilingual Chinese and English; keep code identifiers, commands, and config keys in English.
 - Do not reintroduce C++, CMake, or the previous storage source tree.
 - If the storage layer needs an upgrade, extend it through the `internal/store` abstraction without leaking storage details into the RESP command layer.
+- Server logs must use `internal/logging` / `log/slog`; do not use `fmt.Printf` for business runtime logs.
 - When changing command protocol behavior or TTL/size limits, add or update Go tests.

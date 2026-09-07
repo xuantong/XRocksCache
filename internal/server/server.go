@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -18,12 +19,16 @@ type Server struct {
 	cfg     config.Config
 	store   *store.Store
 	version string
+	logger  *slog.Logger
 	active  atomic.Int64
 	started time.Time
 }
 
-func New(cfg config.Config, kv *store.Store, version string) *Server {
-	return &Server{cfg: cfg, store: kv, version: version, started: time.Now()}
+func New(cfg config.Config, kv *store.Store, version string, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Server{cfg: cfg, store: kv, version: version, logger: logger, started: time.Now()}
 }
 
 func (s *Server) ListenAndServe() error {
@@ -32,13 +37,14 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("xrockscache %s listening on %s, dir=%s\n", s.version, addr, s.cfg.Dir)
+	s.logger.Info("server listening", "version", s.version, "addr", addr, "dir", s.cfg.Dir)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
 		if s.cfg.MaxClients > 0 && int(s.active.Load()) >= s.cfg.MaxClients {
+			s.logger.Warn("reject connection because maxclients reached", "maxclients", s.cfg.MaxClients, "remote_addr", conn.RemoteAddr().String())
 			_ = conn.Close()
 			continue
 		}
@@ -60,6 +66,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		args, err := reader.ReadCommand()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
+				s.logger.Warn("read command failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
 				_ = writer.Error("ERR " + err.Error())
 				_ = writer.Flush()
 			}

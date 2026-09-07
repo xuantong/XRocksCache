@@ -2,10 +2,11 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/xuantong/XRocksCache/internal/config"
+	"github.com/xuantong/XRocksCache/internal/logging"
 	"github.com/xuantong/XRocksCache/internal/server"
 	"github.com/xuantong/XRocksCache/internal/store"
 )
@@ -29,13 +30,13 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("xrockscache %s\n", version)
+		_, _ = os.Stdout.WriteString("xrockscache " + version + "\n")
 		return
 	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("load config failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -54,16 +55,38 @@ func main() {
 		cfg.RequirePass = requirePass
 	}
 
+	logger, logCloser, err := logging.New(logging.Config{
+		Dir:    cfg.LogDir,
+		Level:  cfg.LogLevel,
+		Format: cfg.LogFormat,
+	})
+	if err != nil {
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("init logger failed", "error", err)
+		os.Exit(1)
+	}
+	defer logCloser.Close()
+
+	logger.Info("starting xrockscache",
+		"version", version,
+		"config", configPath,
+		"bind", cfg.Bind,
+		"port", cfg.Port,
+		"dir", cfg.Dir,
+		"log_dir", cfg.LogDir,
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
+	)
+
 	kv, err := store.Open(cfg.Dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "open store: %v\n", err)
+		logger.Error("open store failed", "error", err, "dir", cfg.Dir)
 		os.Exit(1)
 	}
 	defer kv.Close()
 
-	srv := server.New(cfg, kv, version)
+	srv := server.New(cfg, kv, version, logger)
 	if err := srv.ListenAndServe(); err != nil {
-		fmt.Fprintf(os.Stderr, "server stopped: %v\n", err)
+		logger.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
 }

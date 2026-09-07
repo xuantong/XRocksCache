@@ -14,6 +14,8 @@ type Config struct {
 	Port        int
 	Dir         string
 	LogDir      string
+	LogLevel    string
+	LogFormat   string
 	RequirePass string
 	MaxClients  int
 	Workers     int
@@ -26,6 +28,8 @@ func Default() Config {
 		Port:       6666,
 		Dir:        "data",
 		LogDir:     "stdout",
+		LogLevel:   "info",
+		LogFormat:  "text",
 		MaxClients: 1024,
 		Workers:    2,
 		Profile:    true,
@@ -78,6 +82,10 @@ func Load(path string) (Config, error) {
 			cfg.Dir = value
 		case "log-dir":
 			cfg.LogDir = value
+		case "log-level":
+			cfg.LogLevel = strings.ToLower(value)
+		case "log-format":
+			cfg.LogFormat = strings.ToLower(value)
 		case "requirepass":
 			cfg.RequirePass = value
 		case "maxclients":

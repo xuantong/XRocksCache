@@ -17,7 +17,7 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = kv.Close() })
-	return New(config.Default(), kv, "test")
+	return New(config.Default(), kv, "test", nil)
 }
 
 func runCommand(t *testing.T, srv *Server, args ...string) string {
