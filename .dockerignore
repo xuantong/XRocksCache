@@ -1,52 +1,17 @@
-/.github
-/tests
-/Dockerfile
-
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
+.git
+.github
+.claude
+.devcontainer
+build
+benchmark/bin
+benchmark/results
+data
 *.exe
 *.out
-*.app
-
+*.test
+coverage.out
 *.pyc
-*.swp
-*.swo
 .DS_Store
-version.h
-
 .idea
 .vscode
 .cache
-
-compactdb
-testdb
-
-build
-cmake-build-*

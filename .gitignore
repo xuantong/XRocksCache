@@ -22,10 +22,6 @@
 *.dylib
 *.dll
 
-# Fortran module files
-*.mod
-*.smod
-
 # Compiled Static libraries
 *.lai
 *.la
@@ -52,6 +48,10 @@
 /build/
 /cmake-build-*/
 /build-*/
+
+# Go workspace artifacts
+/data/
+/coverage.out
 
 # XRocksCache benchmark artifacts
 /benchmark/bin/

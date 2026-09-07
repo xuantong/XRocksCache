@@ -2,78 +2,52 @@
 
 ## 中文
 
-本仓库是 XRocksCache：一个面向低成本云服务器的大容量单机 K/V 缓存服务，基于 RocksDB 存储，兼容 Redis 协议中的核心字符串与基础管理能力。
+本仓库当前主干已切换为 Go 实现。切换前的 C++ 精简版保存在本地 Git tag `release_tag_cpp_baseline_20260907`。
 
 ### 项目边界
 
 - 服务端二进制目标固定为 `xrockscache`。
 - 默认配置文件为 `xrockscache.conf`，4C8G 基线配置为 `xrockscache-4c8g.conf`。
-- 项目聚焦 String K/V 缓存，不再保留 Hash、List、Set、ZSet、Stream、JSON、Bloom、Search、Cluster、Replication、Lua/RDB 导入导出等非核心能力。
-- `SET` 类写入必须遵守缓存业务约束：key 最大 512 KiB、value 最大 1 MiB、TTL 最长 15 天。
-- 性能基线以低成本 2C4G / 4C8G 云服务器为目标，优先保证 1w QPS 下请求延迟在 100ms 以内。
+- 项目聚焦单机 String K/V 缓存，不提供 Cluster、Replication、Lua、Search、Pub/Sub 或复杂 Redis 数据结构。
+- key 最大 512KiB，value 最大 1MiB，写入 TTL 最长 15 天。
+- 优先保证低成本 2C4G / 4C8G 云服务器上的可部署性、可压测性和 100ms 内延迟目标。
 
-### 构建
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISABLE_JEMALLOC=ON
-cmake --build build --target xrockscache -j4
-```
-
-如果本机没有 Ninja，可改用默认生成器：
+### 构建与测试
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISABLE_JEMALLOC=ON
-cmake --build build --target xrockscache -j4
-```
-
-### 本地运行
-
-```bash
-./build/xrockscache -c xrockscache.conf
+go build -trimpath -o build/xrockscache ./cmd/xrockscache
+go test ./...
 ```
 
 ### 开发规则
 
-- 代码、命令名、配置项保持英文；面向用户的新文档必须同时包含中文和英文。
-- 优先做小而清晰的补丁，不要重新引入已删除的旧复杂数据结构或分布式能力。
-- 修改存储层、命令层或配置约束后，至少执行一次 `xrockscache` 目标构建。
-- 保留必要的 Apache 2.0 上游版权与 NOTICE 归属；不要恢复旧项目品牌、官网、CI、发布、测试矩阵或社区文档。
+- 用户文档保持中英文双语；代码标识符、命令、配置键保持英文。
+- 不要重新引入 C++、CMake 或旧存储源码树。
+- 存储层如果需要升级，应优先通过 `internal/store` 抽象扩展，不要影响 RESP 命令层。
+- 修改命令协议或 TTL/大小限制后，必须补充或更新 Go 测试。
 
 ## English
 
-This repository is XRocksCache: a large-capacity, single-node K/V cache for low-cost cloud servers. It uses RocksDB for persistence and keeps Redis protocol compatibility for core string commands and basic administration.
+The current main branch has been switched to a Go implementation. The minimal C++ baseline before the rewrite is preserved in the local Git tag `release_tag_cpp_baseline_20260907`.
 
 ### Project scope
 
 - The server binary target is fixed as `xrockscache`.
 - The default config file is `xrockscache.conf`; the 4C8G baseline config is `xrockscache-4c8g.conf`.
-- The project focuses on String K/V cache workloads. Hash, List, Set, ZSet, Stream, JSON, Bloom, Search, Cluster, Replication, Lua, and RDB import/export are out of scope.
-- `SET`-style writes must follow cache constraints: maximum key size 512 KiB, maximum value size 1 MiB, and maximum TTL 15 days.
-- The performance baseline targets low-cost 2C4G / 4C8G cloud servers and prioritizes keeping request latency within 100 ms at 10k QPS.
+- The project focuses on single-node String K/V cache workloads. Cluster, Replication, Lua, Search, Pub/Sub, and complex Redis data structures are out of scope.
+- Maximum key size is 512KiB, maximum value size is 1MiB, and maximum write TTL is 15 days.
+- Prioritize deployability, benchmarkability, and sub-100ms latency on low-cost 2C4G / 4C8G cloud servers.
 
-### Build
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISABLE_JEMALLOC=ON
-cmake --build build --target xrockscache -j4
-```
-
-If Ninja is unavailable, use the default generator:
+### Build and test
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISABLE_JEMALLOC=ON
-cmake --build build --target xrockscache -j4
-```
-
-### Local run
-
-```bash
-./build/xrockscache -c xrockscache.conf
+go build -trimpath -o build/xrockscache ./cmd/xrockscache
+go test ./...
 ```
 
 ### Development rules
 
-- Keep code, command names, and config keys in English; all new user-facing documents must be bilingual Chinese and English.
-- Prefer small, reviewable patches. Do not reintroduce removed complex data structures or distributed features.
-- After changing storage, commands, or config constraints, run at least one `xrockscache` target build.
-- Keep the required Apache 2.0 upstream copyright and NOTICE attribution. Do not restore old project branding, website links, CI, release scripts, test matrix, or community documents.
+- Keep user-facing documents bilingual Chinese and English; keep code identifiers, commands, and config keys in English.
+- Do not reintroduce C++, CMake, or the previous storage source tree.
+- If the storage layer needs an upgrade, extend it through the `internal/store` abstraction without leaking storage details into the RESP command layer.
+- When changing command protocol behavior or TTL/size limits, add or update Go tests.

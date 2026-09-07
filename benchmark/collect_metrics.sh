@@ -11,7 +11,7 @@ output_dir="$2"
 data_dir="${3:-}"
 interval="${METRICS_INTERVAL:-1}"
 xrc_host="${XRC_HOST:-127.0.0.1}"
-xrc_port="${XRC_PORT:-6379}"
+xrc_port="${XRC_PORT:-6666}"
 
 if [[ ! -r "/proc/${server_pid}/status" ]]; then
   echo "Cannot read process ${server_pid}" >&2

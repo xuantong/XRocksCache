@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 xrcbench="${XRCBENCH:-${script_dir}/bin/xrcbench}"
 
-addr="${XRC_ADDR:-127.0.0.1:6379}"
+addr="${XRC_ADDR:-127.0.0.1:6666}"
 dataset_size="${DATASET_SIZE:-10GiB}"
 value_size="${VALUE_SIZE:-1KiB}"
 clients="${CLIENTS:-16}"

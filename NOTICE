@@ -2,46 +2,11 @@ XRocksCache
 Copyright 2026 XRocksCache contributors
 
 中文：
-本产品包含基于 Apache License 2.0 授权的软件及其派生代码。
-部分代码源自 Apache Kvrocks 项目，版权归 The Apache Software Foundation 及其贡献者所有。
-XRocksCache 保留必要的上游版权与许可归属，但项目定位、文档、配置和发布目标均独立于上游项目。
+当前主干为 Go 语言重新实现版本。切换前的 C++ 精简版已保存在本地 Git tag `release_tag_cpp_baseline_20260907`。
+仓库历史中包含基于 Apache License 2.0 授权的软件及其派生代码；部分历史代码源自 Apache Kvrocks 项目，版权归 The Apache Software Foundation 及其贡献者所有。
+当前 Go 版运行时代码仅使用 Go 标准库，没有新增第三方运行时依赖。
 
 English:
-This product includes software and derivative code licensed under the Apache License 2.0.
-Portions of the code are derived from the Apache Kvrocks project, copyright The Apache Software Foundation and its contributors.
-XRocksCache keeps the required upstream copyright and license attribution, while its product scope, documentation, configuration, and release target are independent from the upstream project.
-
-================================================================
-
-Third-party dependencies / 第三方依赖
-
-The following dependency list describes components still used by XRocksCache after the minimal K/V cache cleanup.
-以下依赖列表仅描述 XRocksCache 精简为 K/V 缓存后仍在使用的组件。
-
-Apache-2.0:
-- RocksDB: https://github.com/facebook/rocksdb
-- oneTBB: https://github.com/oneapi-src/oneTBB
-- fast_float: https://github.com/fastfloat/fast_float
-
-BSD-2-Clause:
-- lz4: https://github.com/lz4/lz4
-- xxHash: https://github.com/Cyan4973/xxHash
-
-BSD-3-Clause:
-- libevent: https://github.com/libevent/libevent
-- snappy: https://github.com/google/snappy
-
-MIT:
-- fmt: https://github.com/fmtlib/fmt
-- cpptrace: https://github.com/jeremy-rifkin/cpptrace
-- jsoncons: https://github.com/danielaparker/jsoncons
-- spdlog: https://github.com/gabime/spdlog
-
-Boost Software License Version 1.0:
-- span-lite: https://github.com/martinmoene/span-lite
-
-zlib/libpng:
-- zlib-ng: https://github.com/zlib-ng/zlib-ng
-
-License texts are kept under the root LICENSE file and the licenses/ directory when applicable.
-相关许可证正文保留在根目录 LICENSE 文件以及 licenses/ 目录中。
+The current main branch is a Go rewrite. The minimal C++ baseline before the switch is preserved in the local Git tag `release_tag_cpp_baseline_20260907`.
+The repository history includes software and derivative code licensed under the Apache License 2.0; parts of the historical code are derived from the Apache Kvrocks project, copyright The Apache Software Foundation and its contributors.
+The current Go runtime code uses only the Go standard library and adds no third-party runtime dependency.

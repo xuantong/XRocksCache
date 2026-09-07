@@ -331,7 +331,7 @@ func readRESPLine(r *bufio.Reader) ([]byte, error) {
 }
 
 func addCommonFlags(fs *flag.FlagSet, options *commonOptions) {
-	fs.StringVar(&options.addr, "addr", "127.0.0.1:6379", "Redis-compatible server address")
+	fs.StringVar(&options.addr, "addr", "127.0.0.1:6666", "Redis-compatible server address")
 	fs.StringVar(&options.password, "password", os.Getenv("XRC_PASSWORD"), "Password (prefer XRC_PASSWORD)")
 	fs.StringVar(&options.prefix, "prefix", "xrc:", "Key prefix")
 	fs.IntVar(&options.keyWidth, "key-width", 12, "Zero-padded numeric key width")

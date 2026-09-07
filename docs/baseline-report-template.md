@@ -30,7 +30,7 @@
 | --- | ---: | --- |
 | 最大 key | 512KiB / 524,288 bytes | 边界值与边界 + 1 |
 | 最大 value | 1MiB / 1,048,576 bytes | 边界值与边界 + 1 |
-| 最大写入 TTL | 15 天 | 无 TTL、短 TTL、长 TTL、`MSET`、`INCR/DECR`、`EXPIRE/PEXPIRE` |
+| 最大写入 TTL | 15 天 | 短 TTL、长 TTL、`SET EX/PX`、`EXPIRE/PEXPIRE` |
 
 ### 数据集
 
@@ -49,10 +49,10 @@
 
 主验收场景：开放环 10,000 QPS、95% GET / 5% SET、Zipfian key、1KiB 随机 value，GET/SET p99 均不超过 100ms。
 
-### 资源与 RocksDB 观测
+### 资源与 Go/AOF 观测
 
-| Run ID | CPU | RSS | Block-cache hit rate | Read IOPS | Write IOPS | Throughput | await | Compaction bytes | Write stall |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Run ID | CPU | RSS | Goroutines | GC pause p99 | Read IOPS | Write IOPS | Throughput | await | AOF size |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | | | | | | | | | | |
 
 ### 结论与跟进
@@ -93,7 +93,7 @@
 | --- | ---: | --- |
 | Maximum key | 512KiB / 524,288 bytes | boundary and boundary + 1 |
 | Maximum value | 1MiB / 1,048,576 bytes | boundary and boundary + 1 |
-| Maximum write TTL | 15 days | missing TTL, shorter TTL, longer TTL, `MSET`, `INCR/DECR`, `EXPIRE/PEXPIRE` |
+| Maximum write TTL | 15 days | short TTL, longer TTL, `SET EX/PX`, `EXPIRE/PEXPIRE` |
 
 ### Dataset
 
@@ -112,10 +112,10 @@
 
 Primary gate: open-loop 10,000 QPS, 95% GET / 5% SET, Zipfian keys, 1KiB random values, with both GET and SET p99 no greater than 100ms.
 
-### Resource and RocksDB observations
+### Resource and Go/AOF observations
 
-| Run ID | CPU | RSS | Block-cache hit rate | Read IOPS | Write IOPS | Throughput | await | Compaction bytes | Write stall |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Run ID | CPU | RSS | Goroutines | GC pause p99 | Read IOPS | Write IOPS | Throughput | await | AOF size |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | | | | | | | | | | |
 
 ### Findings and follow-ups
