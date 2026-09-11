@@ -176,7 +176,10 @@ func (h *latencyHistogram) percentile(p float64) time.Duration {
 			exponent := index / 64
 			subBucket := index % 64
 			base := uint64(1) << exponent
-			width := max(base/64, 1)
+			width := base / 64
+			if width == 0 {
+				width = 1
+			}
 			return time.Duration(base + uint64(subBucket+1)*width)
 		}
 	}
