@@ -72,6 +72,10 @@ The current Go implementation does not try to clone full Redis or the previous C
 go build -trimpath -o build/xrockscache ./cmd/xrockscache
 ```
 
+中文：主模块名为 `xrockscache`，内部包使用 `xrockscache/internal/...`。这样代码可以同时镜像到 Gitee 和 GitHub，不把模块身份绑定到某一个远端仓库。
+
+English: The main module path is `xrockscache`, and internal packages use `xrockscache/internal/...`. This keeps the code mirror-friendly across both Gitee and GitHub without binding the module identity to one remote repository.
+
 ### Run
 
 ```bash

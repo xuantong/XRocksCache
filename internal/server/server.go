@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xuantong/XRocksCache/internal/config"
-	"github.com/xuantong/XRocksCache/internal/resp"
-	"github.com/xuantong/XRocksCache/internal/store"
+	"xrockscache/internal/config"
+	"xrockscache/internal/resp"
+	"xrockscache/internal/store"
 )
 
 type Server struct {

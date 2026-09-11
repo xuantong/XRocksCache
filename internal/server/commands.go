@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xuantong/XRocksCache/internal/resp"
-	"github.com/xuantong/XRocksCache/internal/store"
+	"xrockscache/internal/resp"
+	"xrockscache/internal/store"
 )
 
 func (s *Server) execute(w *resp.Writer, args []string, authenticated *bool) bool {

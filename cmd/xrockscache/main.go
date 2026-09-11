@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/xuantong/XRocksCache/internal/config"
-	"github.com/xuantong/XRocksCache/internal/logging"
-	"github.com/xuantong/XRocksCache/internal/server"
-	"github.com/xuantong/XRocksCache/internal/store"
+	"xrockscache/internal/config"
+	"xrockscache/internal/logging"
+	"xrockscache/internal/server"
+	"xrockscache/internal/store"
 )
 
 const version = "0.2.0-go"

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xuantong/XRocksCache/internal/config"
-	"github.com/xuantong/XRocksCache/internal/resp"
-	"github.com/xuantong/XRocksCache/internal/store"
+	"xrockscache/internal/config"
+	"xrockscache/internal/resp"
+	"xrockscache/internal/store"
 )
 
 func newTestServer(t *testing.T) *Server {

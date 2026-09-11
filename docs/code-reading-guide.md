@@ -18,6 +18,8 @@
 
 当前主干服务端与压测工具均只使用 Go 标准库，因此不再保留旧 C++ 版本的第三方依赖许可证目录。
 
+主模块路径为 `xrockscache`，这是为了让同一份代码同时适配 Gitee 与 GitHub 镜像；内部包不要写成 `github.com/...` 或 `gitee.com/...`。
+
 ## English
 
 The main branch has been switched from C++ to Go. The minimal C++ baseline before the switch is preserved in `release_tag_cpp_baseline_20260907`.
@@ -35,3 +37,5 @@ Suggested reading order:
 The current storage layer uses a standard-library append-only log so the Go server is runnable, testable, and benchmark-ready first. If the storage backend is replaced later, keep the change inside `internal/store` or a new storage adapter layer instead of leaking storage details into the command layer.
 
 The current server and benchmark tool use only the Go standard library, so the third-party dependency license directory from the previous C++ version is no longer kept.
+
+The main module path is `xrockscache` so the same source tree works cleanly as both a Gitee and GitHub mirror. Internal packages should not use `github.com/...` or `gitee.com/...`.

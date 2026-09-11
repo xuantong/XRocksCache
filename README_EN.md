@@ -11,6 +11,8 @@ Build:
 go build -trimpath -o build/xrockscache ./cmd/xrockscache
 ```
 
+The main module path is `xrockscache`, and internal packages use `xrockscache/internal/...`. This keeps the code mirror-friendly across both Gitee and GitHub without binding the module identity to one remote repository.
+
 Run:
 
 ```bash

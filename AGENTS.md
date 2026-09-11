@@ -22,6 +22,7 @@ go test ./...
 ### 开发规则
 
 - 用户文档保持中英文双语；代码标识符、命令、配置键保持英文。
+- 主模块路径保持为 `xrockscache`，内部包使用 `xrockscache/internal/...`，避免绑定到单一 Git 远端。
 - 不要重新引入 C++、CMake 或旧存储源码树。
 - 存储层如果需要升级，应优先通过 `internal/store` 抽象扩展，不要影响 RESP 命令层。
 - 服务端日志必须使用 `internal/logging` / `log/slog`，不要用 `fmt.Printf` 打业务运行日志；文件日志必须保持按天切换和保留期清理语义。
@@ -49,6 +50,7 @@ go test ./...
 ### Development rules
 
 - Keep user-facing documents bilingual Chinese and English; keep code identifiers, commands, and config keys in English.
+- Keep the main module path as `xrockscache`; internal packages should use `xrockscache/internal/...` so the code is not bound to a single Git remote.
 - Do not reintroduce C++, CMake, or the previous storage source tree.
 - If the storage layer needs an upgrade, extend it through the `internal/store` abstraction without leaking storage details into the RESP command layer.
 - Server logs must use `internal/logging` / `log/slog`; do not use `fmt.Printf` for business runtime logs. File logs must keep daily rotation and retention cleanup semantics.

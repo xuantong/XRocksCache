@@ -1,3 +1,3 @@
-module github.com/xuantong/XRocksCache
+module xrockscache
 
 go 1.22
