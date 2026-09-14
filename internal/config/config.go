@@ -10,31 +10,41 @@ import (
 )
 
 type Config struct {
-	Bind             string
-	Port             int
-	Dir              string
-	LogDir           string
-	LogLevel         string
-	LogFormat        string
-	LogRetentionDays int
-	RequirePass      string
-	MaxClients       int
-	Workers          int
-	Profile          bool
+	Bind                                string
+	Port                                int
+	Dir                                 string
+	LogDir                              string
+	LogLevel                            string
+	LogFormat                           string
+	LogRetentionDays                    int
+	ActiveExpireEnabled                 bool
+	ActiveExpireBucketSeconds           int
+	ActiveExpireIntervalSeconds         int
+	ActiveExpireCycleBudgetMilliseconds int
+	ActiveExpireMaxDeletesPerCycle      int
+	RequirePass                         string
+	MaxClients                          int
+	Workers                             int
+	Profile                             bool
 }
 
 func Default() Config {
 	return Config{
-		Bind:             "127.0.0.1",
-		Port:             6666,
-		Dir:              "data",
-		LogDir:           "stdout",
-		LogLevel:         "info",
-		LogFormat:        "text",
-		LogRetentionDays: 15,
-		MaxClients:       1024,
-		Workers:          2,
-		Profile:          true,
+		Bind:                                "127.0.0.1",
+		Port:                                6666,
+		Dir:                                 "data",
+		LogDir:                              "stdout",
+		LogLevel:                            "info",
+		LogFormat:                           "text",
+		LogRetentionDays:                    15,
+		ActiveExpireEnabled:                 true,
+		ActiveExpireBucketSeconds:           30,
+		ActiveExpireIntervalSeconds:         10,
+		ActiveExpireCycleBudgetMilliseconds: 10,
+		ActiveExpireMaxDeletesPerCycle:      1000,
+		MaxClients:                          1024,
+		Workers:                             2,
+		Profile:                             true,
 	}
 }
 
@@ -94,6 +104,36 @@ func Load(path string) (Config, error) {
 				return cfg, fmt.Errorf("%s:%d: invalid log-retention-days", path, lineNo)
 			}
 			cfg.LogRetentionDays = v
+		case "active-expire-enabled":
+			v, err := parseBool(value)
+			if err != nil {
+				return cfg, fmt.Errorf("%s:%d: invalid active-expire-enabled", path, lineNo)
+			}
+			cfg.ActiveExpireEnabled = v
+		case "active-expire-bucket-seconds":
+			v, err := strconv.Atoi(value)
+			if err != nil || v <= 0 || v > 3600 {
+				return cfg, fmt.Errorf("%s:%d: invalid active-expire-bucket-seconds", path, lineNo)
+			}
+			cfg.ActiveExpireBucketSeconds = v
+		case "active-expire-interval-seconds":
+			v, err := strconv.Atoi(value)
+			if err != nil || v <= 0 || v > 3600 {
+				return cfg, fmt.Errorf("%s:%d: invalid active-expire-interval-seconds", path, lineNo)
+			}
+			cfg.ActiveExpireIntervalSeconds = v
+		case "active-expire-cycle-budget-ms":
+			v, err := strconv.Atoi(value)
+			if err != nil || v <= 0 || v > 1000 {
+				return cfg, fmt.Errorf("%s:%d: invalid active-expire-cycle-budget-ms", path, lineNo)
+			}
+			cfg.ActiveExpireCycleBudgetMilliseconds = v
+		case "active-expire-max-deletes-per-cycle":
+			v, err := strconv.Atoi(value)
+			if err != nil || v <= 0 {
+				return cfg, fmt.Errorf("%s:%d: invalid active-expire-max-deletes-per-cycle", path, lineNo)
+			}
+			cfg.ActiveExpireMaxDeletesPerCycle = v
 		case "requirepass":
 			cfg.RequirePass = value
 		case "maxclients":
@@ -119,4 +159,15 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+func parseBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "yes", "true", "1", "on":
+		return true, nil
+	case "no", "false", "0", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid bool")
+	}
 }

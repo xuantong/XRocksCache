@@ -282,14 +282,19 @@ uptime_in_seconds:%d
 connected_clients:%d
 
 # Keyspace
-db0:keys=%s,expires=unknown
+db0:keys=%s,expires=%s
 
 # XRocksCache
 max_key_bytes:%s
 max_value_bytes:%s
 max_ttl_seconds:%s
 aof_path:%s
-`, s.version, int64(time.Since(s.started)/time.Second), s.active.Load(), stats["keys"], stats["max_key"], stats["max_value"], stats["max_ttl_sec"], stats["aof_path"])
+active_expire_enabled:%s
+active_expire_bucket_seconds:%s
+active_expire_interval_seconds:%s
+active_expire_cycle_budget_ms:%s
+active_expire_max_deletes_per_cycle:%s
+`, s.version, int64(time.Since(s.started)/time.Second), s.active.Load(), stats["keys"], stats["expires"], stats["max_key"], stats["max_value"], stats["max_ttl_sec"], stats["aof_path"], stats["active_expire_enabled"], stats["active_expire_bucket_seconds"], stats["active_expire_interval_seconds"], stats["active_expire_cycle_budget_ms"], stats["active_expire_max_deletes_cycle"])
 	_ = w.BulkString(body)
 }
 

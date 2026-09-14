@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,14 +35,49 @@ type SetOptions struct {
 	KeepTTL bool
 }
 
+type Options struct {
+	Expiration ExpirationConfig
+	Logger     *slog.Logger
+}
+
+type ExpirationConfig struct {
+	Enabled            bool
+	BucketSize         time.Duration
+	Interval           time.Duration
+	CycleBudget        time.Duration
+	MaxDeletesPerCycle int
+}
+
+func DefaultExpirationConfig() ExpirationConfig {
+	return ExpirationConfig{
+		Enabled:            true,
+		BucketSize:         30 * time.Second,
+		Interval:           10 * time.Second,
+		CycleBudget:        10 * time.Millisecond,
+		MaxDeletesPerCycle: 1000,
+	}
+}
+
 type Store struct {
-	mu    sync.RWMutex
-	items map[string]Entry
-	file  *os.File
-	path  string
+	mu            sync.RWMutex
+	items         map[string]Entry
+	expireIndex   map[string]int64
+	expireBuckets map[int64]map[string]struct{}
+	file          *os.File
+	path          string
+
+	expiration      ExpirationConfig
+	logger          *slog.Logger
+	cleanerStop     chan struct{}
+	cleanerDone     chan struct{}
+	cleanerStopOnce sync.Once
 }
 
 func Open(dir string) (*Store, error) {
+	return OpenWithOptions(dir, Options{Expiration: DefaultExpirationConfig()})
+}
+
+func OpenWithOptions(dir string, opts Options) (*Store, error) {
 	if dir == "" {
 		dir = "data"
 	}
@@ -49,19 +85,51 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "xrockscache.aof")
-	s := &Store{items: map[string]Entry{}, path: path}
+	expiration := opts.Expiration
+	if expiration.BucketSize <= 0 {
+		expiration.BucketSize = 30 * time.Second
+	}
+	if expiration.Interval <= 0 {
+		expiration.Interval = 10 * time.Second
+	}
+	if expiration.CycleBudget <= 0 {
+		expiration.CycleBudget = 10 * time.Millisecond
+	}
+	if expiration.MaxDeletesPerCycle <= 0 {
+		expiration.MaxDeletesPerCycle = 1000
+	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	s := &Store{
+		items:         map[string]Entry{},
+		expireIndex:   map[string]int64{},
+		expireBuckets: map[int64]map[string]struct{}{},
+		path:          path,
+		expiration:    expiration,
+		logger:        logger,
+	}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	s.rebuildExpireIndex(time.Now())
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
 	s.file = file
+	s.startExpirationCleaner()
 	return s, nil
 }
 
 func (s *Store) Close() error {
+	if s.cleanerStop != nil {
+		s.cleanerStopOnce.Do(func() {
+			close(s.cleanerStop)
+			<-s.cleanerDone
+		})
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.file == nil {
@@ -135,6 +203,17 @@ func (s *Store) applyRecord(payload []byte, validate bool) error {
 	return nil
 }
 
+func (s *Store) rebuildExpireIndex(now time.Time) {
+	nowMs := now.UnixMilli()
+	for key, entry := range s.items {
+		if entry.ExpiresAt > 0 && entry.ExpiresAt <= nowMs {
+			delete(s.items, key)
+			continue
+		}
+		s.indexExpirationLocked(key, entry.ExpiresAt)
+	}
+}
+
 func (s *Store) appendRecordLocked(op byte, key string, value []byte, expiresAt int64) error {
 	payloadSize := 17 + len(key) + len(value)
 	payload := make([]byte, payloadSize)
@@ -163,6 +242,144 @@ func validateKeyValue(key string, value []byte) error {
 		return fmt.Errorf("ERR value exceeds 1MiB")
 	}
 	return nil
+}
+
+func (s *Store) expirationBucketLocked(expiresAt int64) int64 {
+	bucketMs := s.expiration.BucketSize.Milliseconds()
+	if bucketMs <= 0 {
+		bucketMs = int64((30 * time.Second).Milliseconds())
+	}
+	if expiresAt <= 0 {
+		return 0
+	}
+	return ((expiresAt + bucketMs - 1) / bucketMs) * bucketMs
+}
+
+func (s *Store) indexExpirationLocked(key string, expiresAt int64) {
+	s.removeExpirationIndexLocked(key)
+	if expiresAt <= 0 {
+		return
+	}
+	bucket := s.expirationBucketLocked(expiresAt)
+	keys := s.expireBuckets[bucket]
+	if keys == nil {
+		keys = map[string]struct{}{}
+		s.expireBuckets[bucket] = keys
+	}
+	keys[key] = struct{}{}
+	s.expireIndex[key] = bucket
+}
+
+func (s *Store) removeExpirationIndexLocked(key string) {
+	bucket, ok := s.expireIndex[key]
+	if !ok {
+		return
+	}
+	delete(s.expireIndex, key)
+	if keys := s.expireBuckets[bucket]; keys != nil {
+		delete(keys, key)
+		if len(keys) == 0 {
+			delete(s.expireBuckets, bucket)
+		}
+	}
+}
+
+func (s *Store) setEntryLocked(key string, value []byte, expiresAt int64) {
+	s.items[key] = Entry{Value: append([]byte(nil), value...), ExpiresAt: expiresAt}
+	s.indexExpirationLocked(key, expiresAt)
+}
+
+func (s *Store) deleteEntryLocked(key string) {
+	delete(s.items, key)
+	s.removeExpirationIndexLocked(key)
+}
+
+func (s *Store) startExpirationCleaner() {
+	if !s.expiration.Enabled {
+		return
+	}
+	s.cleanerStop = make(chan struct{})
+	s.cleanerDone = make(chan struct{})
+	go s.expirationCleaner()
+}
+
+func (s *Store) expirationCleaner() {
+	defer close(s.cleanerDone)
+	ticker := time.NewTicker(s.expiration.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			stats := s.cleanExpiredCycle(time.Now())
+			if stats.deleted > 0 {
+				s.logger.Debug("active expiration cycle finished",
+					"deleted", stats.deleted,
+					"scanned", stats.scanned,
+					"remaining_due_buckets", stats.remainingDueBuckets,
+				)
+			}
+		case <-s.cleanerStop:
+			return
+		}
+	}
+}
+
+type expireCycleStats struct {
+	scanned             int
+	deleted             int
+	remainingDueBuckets int
+}
+
+func (s *Store) cleanExpiredCycle(now time.Time) expireCycleStats {
+	start := time.Now()
+	nowMs := now.UnixMilli()
+	stats := expireCycleStats{}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for bucket, keys := range s.expireBuckets {
+		if bucket > nowMs {
+			continue
+		}
+		for key := range keys {
+			stats.scanned++
+			entry, ok := s.items[key]
+			indexedBucket, indexed := s.expireIndex[key]
+			if !ok || !indexed || indexedBucket != bucket || entry.ExpiresAt == 0 {
+				delete(keys, key)
+			} else if entry.ExpiresAt <= nowMs {
+				if err := s.appendRecordLocked(recordDel, key, nil, 0); err != nil {
+					s.logger.Error("persist expired key deletion failed", "key", key, "error", err)
+					return stats
+				}
+				s.deleteEntryLocked(key)
+				stats.deleted++
+			}
+			if s.expiration.MaxDeletesPerCycle > 0 && stats.deleted >= s.expiration.MaxDeletesPerCycle {
+				return s.finishExpireCycleStatsLocked(stats)
+			}
+			if s.expiration.CycleBudget > 0 && time.Since(start) >= s.expiration.CycleBudget {
+				return s.finishExpireCycleStatsLocked(stats)
+			}
+		}
+		if len(keys) == 0 {
+			delete(s.expireBuckets, bucket)
+		} else {
+			stats.remainingDueBuckets++
+		}
+	}
+	return stats
+}
+
+func (s *Store) finishExpireCycleStatsLocked(stats expireCycleStats) expireCycleStats {
+	nowMs := time.Now().UnixMilli()
+	for bucket, keys := range s.expireBuckets {
+		if bucket <= nowMs && len(keys) > 0 {
+			stats.remainingDueBuckets++
+		}
+	}
+	return stats
 }
 
 func validateTTL(ttl time.Duration) error {
@@ -207,7 +424,7 @@ func (s *Store) Set(key string, value []byte, opts SetOptions) ([]byte, bool, er
 	if err := s.appendRecordLocked(recordSet, key, value, expiresAt); err != nil {
 		return old, false, err
 	}
-	s.items[key] = Entry{Value: append([]byte(nil), value...), ExpiresAt: expiresAt}
+	s.setEntryLocked(key, value, expiresAt)
 	return old, true, nil
 }
 
@@ -224,7 +441,7 @@ func (s *Store) getLocked(key string, now time.Time) ([]byte, bool) {
 		return nil, false
 	}
 	if entry.ExpiresAt > 0 && entry.ExpiresAt <= now.UnixMilli() {
-		delete(s.items, key)
+		s.deleteEntryLocked(key)
 		_ = s.appendRecordLocked(recordDel, key, nil, 0)
 		return nil, false
 	}
@@ -243,7 +460,7 @@ func (s *Store) MSet(pairs map[string][]byte) error {
 		if err := s.appendRecordLocked(recordSet, key, value, 0); err != nil {
 			return err
 		}
-		s.items[key] = Entry{Value: append([]byte(nil), value...)}
+		s.setEntryLocked(key, value, 0)
 	}
 	return nil
 }
@@ -258,7 +475,7 @@ func (s *Store) Del(keys ...string) (int64, error) {
 			if err := s.appendRecordLocked(recordDel, key, nil, 0); err != nil {
 				return removed, err
 			}
-			delete(s.items, key)
+			s.deleteEntryLocked(key)
 			removed++
 		}
 	}
@@ -292,7 +509,7 @@ func (s *Store) Expire(key string, ttl time.Duration) (bool, error) {
 	if err := s.appendRecordLocked(recordSet, key, value, expiresAt); err != nil {
 		return false, err
 	}
-	s.items[key] = Entry{Value: value, ExpiresAt: expiresAt}
+	s.setEntryLocked(key, value, expiresAt)
 	return true, nil
 }
 
@@ -309,7 +526,7 @@ func (s *Store) TTL(key string) (time.Duration, bool, bool) {
 	}
 	ttl := time.Until(time.UnixMilli(expiresAt))
 	if ttl < 0 {
-		delete(s.items, key)
+		s.deleteEntryLocked(key)
 		_ = s.appendRecordLocked(recordDel, key, nil, 0)
 		return 0, false, false
 	}
@@ -350,7 +567,7 @@ func (s *Store) IncrBy(key string, delta int64) (int64, error) {
 	if err := s.appendRecordLocked(recordSet, key, value, expiresAt); err != nil {
 		return 0, err
 	}
-	s.items[key] = Entry{Value: value, ExpiresAt: expiresAt}
+	s.setEntryLocked(key, value, expiresAt)
 	return next, nil
 }
 
@@ -358,10 +575,17 @@ func (s *Store) Stats() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return map[string]string{
-		"keys":        strconv.FormatInt(int64(len(s.items)), 10),
-		"max_key":     strconv.Itoa(MaxKeyBytes),
-		"max_value":   strconv.Itoa(MaxValueBytes),
-		"max_ttl_sec": strconv.FormatInt(int64(MaxTTL/time.Second), 10),
-		"aof_path":    s.path,
+		"keys":                            strconv.FormatInt(int64(len(s.items)), 10),
+		"expires":                         strconv.FormatInt(int64(len(s.expireIndex)), 10),
+		"expire_buckets":                  strconv.FormatInt(int64(len(s.expireBuckets)), 10),
+		"active_expire_enabled":           strconv.FormatBool(s.expiration.Enabled),
+		"active_expire_bucket_seconds":    strconv.FormatInt(int64(s.expiration.BucketSize/time.Second), 10),
+		"active_expire_interval_seconds":  strconv.FormatInt(int64(s.expiration.Interval/time.Second), 10),
+		"active_expire_cycle_budget_ms":   strconv.FormatInt(int64(s.expiration.CycleBudget/time.Millisecond), 10),
+		"active_expire_max_deletes_cycle": strconv.Itoa(s.expiration.MaxDeletesPerCycle),
+		"max_key":                         strconv.Itoa(MaxKeyBytes),
+		"max_value":                       strconv.Itoa(MaxValueBytes),
+		"max_ttl_sec":                     strconv.FormatInt(int64(MaxTTL/time.Second), 10),
+		"aof_path":                        s.path,
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"time"
 
 	"xrockscache/internal/config"
 	"xrockscache/internal/logging"
@@ -77,9 +78,23 @@ func main() {
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
 		"log_retention_days", cfg.LogRetentionDays,
+		"active_expire_enabled", cfg.ActiveExpireEnabled,
+		"active_expire_bucket_seconds", cfg.ActiveExpireBucketSeconds,
+		"active_expire_interval_seconds", cfg.ActiveExpireIntervalSeconds,
+		"active_expire_cycle_budget_ms", cfg.ActiveExpireCycleBudgetMilliseconds,
+		"active_expire_max_deletes_per_cycle", cfg.ActiveExpireMaxDeletesPerCycle,
 	)
 
-	kv, err := store.Open(cfg.Dir)
+	kv, err := store.OpenWithOptions(cfg.Dir, store.Options{
+		Expiration: store.ExpirationConfig{
+			Enabled:            cfg.ActiveExpireEnabled,
+			BucketSize:         time.Duration(cfg.ActiveExpireBucketSeconds) * time.Second,
+			Interval:           time.Duration(cfg.ActiveExpireIntervalSeconds) * time.Second,
+			CycleBudget:        time.Duration(cfg.ActiveExpireCycleBudgetMilliseconds) * time.Millisecond,
+			MaxDeletesPerCycle: cfg.ActiveExpireMaxDeletesPerCycle,
+		},
+		Logger: logger,
+	})
 	if err != nil {
 		logger.Error("open store failed", "error", err, "dir", cfg.Dir)
 		os.Exit(1)

@@ -13,6 +13,7 @@ XRocksCache 是一个用 Go 重新实现的轻量级、单机 K/V 缓存服务�
 - 命令：`GET`、`MGET`、`SET`、`MSET`、`DEL`、`EXISTS`、`EXPIRE`、`PEXPIRE`、`TTL`、`PTTL`、`INCR`、`DECR`、`INCRBY`、`DECRBY`、`PING`、`AUTH`、`INFO`、`DBSIZE`、`CLIENT`、`COMMAND`
 - 存储：标准库追加日志文件 `xrockscache.aof` + 内存索引
 - 日志：使用 Go 标准库 `log/slog` 输出结构化日志，支持 `text` / `json` 格式
+- 过期：读路径保证过期 key 不可见，后台时间桶清理器延迟释放内存并持久化 `DEL` 删除记录
 - 约束：key <= 512KiB，value <= 1MiB，TTL <= 15 天
 - 依赖：当前服务端与压测工具均只使用 Go 标准库，根目录仅保留 Apache License 2.0
 
@@ -102,6 +103,20 @@ log-retention-days 15
 中文：`log-dir stdout/stderr` 不做应用内轮转，适合容器、systemd 或云日志 Agent 接管。`log-dir <目录>` 时写入 `xrockscache-YYYY-MM-DD.log`，跨天自动切换，并删除超过 `log-retention-days` 的旧日志；`0` 表示不自动清理。
 
 English: `log-dir stdout/stderr` does not rotate inside the application and is suitable for containers, systemd, or cloud logging agents. With `log-dir <directory>`, logs are written to `xrockscache-YYYY-MM-DD.log`, rotated automatically at day boundaries, and old files beyond `log-retention-days` are removed; `0` disables automatic cleanup.
+
+### Active expiration / 主动过期
+
+```conf
+active-expire-enabled yes
+active-expire-bucket-seconds 30
+active-expire-interval-seconds 10
+active-expire-cycle-budget-ms 10
+active-expire-max-deletes-per-cycle 1000
+```
+
+中文：XRocksCache 使用时间桶维护 TTL key。读路径始终检查 `ExpiresAt`，所以过期 key 即使还没被后台物理删除，也不会被 `GET`、`EXISTS`、`TTL` 等命令看见。后台清理器按低频、限时、限量方式处理到期桶，删除内存记录，并向 AOF 追加 `DEL`，用于减少重启恢复和后续压缩压力。
+
+English: XRocksCache tracks TTL keys with time buckets. The read path always checks `ExpiresAt`, so expired keys are invisible to commands such as `GET`, `EXISTS`, and `TTL` even before physical cleanup. The background cleaner processes due buckets with bounded time and delete budgets, removes expired entries from memory, and appends `DEL` records to the AOF to reduce recovery and future compaction pressure.
 
 ### Test
 
