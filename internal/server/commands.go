@@ -289,12 +289,35 @@ max_key_bytes:%s
 max_value_bytes:%s
 max_ttl_seconds:%s
 aof_path:%s
+rocksdb_path:%s
+rocksdb_estimate_live_data_size:%s
+rocksdb_pending_compaction_bytes:%s
+rocksdb_auto_tuned:%s
+rocksdb_compression:%s
+rocksdb_disk_budget_bytes:%s
+rocksdb_memory_budget_bytes:%s
+rocksdb_block_cache_bytes:%s
+rocksdb_write_buffer_bytes:%s
+rocksdb_target_file_size_bytes:%s
+rocksdb_blob_files_enabled:%s
+rocksdb_min_blob_size_bytes:%s
+rocksdb_blob_file_size_bytes:%s
+rocksdb_blob_gc_enabled:%s
+rocksdb_max_background_jobs:%s
+rocksdb_max_subcompactions:%s
+rocksdb_soft_pending_bytes:%s
+rocksdb_hard_pending_bytes:%s
+rocksdb_rate_limiter_bytes_sec:%s
+rocksdb_periodic_compaction_sec:%s
+disk_warn_watermark_bytes:%s
+disk_slowdown_watermark_bytes:%s
+disk_reject_watermark_bytes:%s
 active_expire_enabled:%s
 active_expire_bucket_seconds:%s
 active_expire_interval_seconds:%s
 active_expire_cycle_budget_ms:%s
 active_expire_max_deletes_per_cycle:%s
-`, s.version, int64(time.Since(s.started)/time.Second), s.active.Load(), stats["keys"], stats["expires"], stats["max_key"], stats["max_value"], stats["max_ttl_sec"], stats["aof_path"], stats["active_expire_enabled"], stats["active_expire_bucket_seconds"], stats["active_expire_interval_seconds"], stats["active_expire_cycle_budget_ms"], stats["active_expire_max_deletes_cycle"])
+`, s.version, int64(time.Since(s.started)/time.Second), s.active.Load(), stats["keys"], stats["expires"], stats["max_key"], stats["max_value"], stats["max_ttl_sec"], stats["aof_path"], stats["rocksdb_path"], stats["rocksdb_estimate_live_data_size"], stats["rocksdb_pending_compaction_bytes"], stats["rocksdb_auto_tuned"], stats["rocksdb_compression"], stats["rocksdb_disk_budget_bytes"], stats["rocksdb_memory_budget_bytes"], stats["rocksdb_block_cache_bytes"], stats["rocksdb_write_buffer_bytes"], stats["rocksdb_target_file_size_bytes"], stats["rocksdb_blob_files_enabled"], stats["rocksdb_min_blob_size_bytes"], stats["rocksdb_blob_file_size_bytes"], stats["rocksdb_blob_gc_enabled"], stats["rocksdb_max_background_jobs"], stats["rocksdb_max_subcompactions"], stats["rocksdb_soft_pending_bytes"], stats["rocksdb_hard_pending_bytes"], stats["rocksdb_rate_limiter_bytes_sec"], stats["rocksdb_periodic_compaction_sec"], stats["disk_warn_watermark_bytes"], stats["disk_slowdown_watermark_bytes"], stats["disk_reject_watermark_bytes"], stats["active_expire_enabled"], stats["active_expire_bucket_seconds"], stats["active_expire_interval_seconds"], stats["active_expire_cycle_budget_ms"], stats["active_expire_max_deletes_cycle"])
 	_ = w.BulkString(body)
 }
 

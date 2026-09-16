@@ -85,6 +85,30 @@ func main() {
 		"active_expire_max_deletes_per_cycle", cfg.ActiveExpireMaxDeletesPerCycle,
 	)
 
+	rocksTuning := store.BuildRocksDBTuning(store.DetectResourceProfile(cfg.Dir))
+	logger.Info("rocksdb tuning calculated",
+		"auto_tuned", rocksTuning.AutoTuned,
+		"compression", rocksTuning.Compression,
+		"disk_budget_bytes", rocksTuning.DiskBudgetBytes,
+		"memory_budget_bytes", rocksTuning.MemoryBudgetBytes,
+		"block_cache_bytes", rocksTuning.BlockCacheSizeBytes,
+		"write_buffer_bytes", rocksTuning.WriteBufferSizeBytes,
+		"target_file_size_bytes", rocksTuning.TargetFileSizeBaseBytes,
+		"blob_files_enabled", rocksTuning.EnableBlobFiles,
+		"min_blob_size_bytes", rocksTuning.MinBlobSizeBytes,
+		"blob_file_size_bytes", rocksTuning.BlobFileSizeBytes,
+		"blob_gc_enabled", rocksTuning.EnableBlobGarbageCollection,
+		"max_background_jobs", rocksTuning.MaxBackgroundJobs,
+		"max_subcompactions", rocksTuning.MaxSubcompactions,
+		"soft_pending_compaction_bytes", rocksTuning.SoftPendingCompactionBytesLimit,
+		"hard_pending_compaction_bytes", rocksTuning.HardPendingCompactionBytesLimit,
+		"rate_limiter_bytes_per_sec", rocksTuning.RateLimiterBytesPerSec,
+		"periodic_compaction_seconds", rocksTuning.PeriodicCompactionSeconds,
+		"disk_warn_watermark_bytes", rocksTuning.DiskWarnWatermarkBytes,
+		"disk_slowdown_watermark_bytes", rocksTuning.DiskSlowdownWatermarkBytes,
+		"disk_reject_watermark_bytes", rocksTuning.DiskRejectWatermarkBytes,
+	)
+
 	kv, err := store.OpenWithOptions(cfg.Dir, store.Options{
 		Expiration: store.ExpirationConfig{
 			Enabled:            cfg.ActiveExpireEnabled,
@@ -93,6 +117,7 @@ func main() {
 			CycleBudget:        time.Duration(cfg.ActiveExpireCycleBudgetMilliseconds) * time.Millisecond,
 			MaxDeletesPerCycle: cfg.ActiveExpireMaxDeletesPerCycle,
 		},
+		Tuning: rocksTuning,
 		Logger: logger,
 	})
 	if err != nil {

@@ -151,8 +151,8 @@ func Load(path string) (Config, error) {
 		case "xrockscache-profile":
 			cfg.Profile = strings.EqualFold(value, "yes") || strings.EqualFold(value, "true") || value == "1"
 		default:
-			// Unknown keys are intentionally ignored so old profile files remain readable
-			// while the Go implementation trims the legacy storage-specific surface.
+			// 未知配置键会被有意忽略。
+			// 这样旧 profile 文件仍可读取，同时 Go 实现可以收敛历史存储细节配置面。
 		}
 	}
 	if err := scanner.Err(); err != nil {

@@ -1,17 +1,21 @@
-# Build image / 构建镜像
+# 构建镜像
 FROM golang:1.22-bookworm AS build
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends g++ pkg-config librocksdb-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /xrockscache
 COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
-RUN go build -trimpath -ldflags="-s -w" -o /out/xrockscache ./cmd/xrockscache
+RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/xrockscache ./cmd/xrockscache
 
-# Runtime image / 运行镜像
+# 运行镜像
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates redis-tools && \
+    apt-get install -y --no-install-recommends ca-certificates redis-tools librocksdb-dev && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid=999 -r xrockscache && \
     useradd --uid=999 -r -g xrockscache xrockscache && \

@@ -37,10 +37,19 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
+	return s.Serve(ln)
+}
+
+func (s *Server) Serve(ln net.Listener) error {
+	defer ln.Close()
+	addr := ln.Addr().String()
 	s.logger.Info("server listening", "version", s.version, "addr", addr, "dir", s.cfg.Dir)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 		if s.cfg.MaxClients > 0 && int(s.active.Load()) >= s.cfg.MaxClients {

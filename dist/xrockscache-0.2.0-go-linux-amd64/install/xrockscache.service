@@ -1,0 +1,15 @@
+[Unit]
+Description=XRocksCache
+After=network.target
+
+[Service]
+Type=simple
+User=xrockscache
+Group=xrockscache
+ExecStart=/usr/local/xrockscache/bin/xrockscache -c /etc/xrockscache/xrockscache.conf
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

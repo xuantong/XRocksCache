@@ -1,9 +1,11 @@
-package config
+package config_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"xrockscache/internal/config"
 )
 
 func TestLoadLoggingOptions(t *testing.T) {
@@ -12,7 +14,8 @@ func TestLoadLoggingOptions(t *testing.T) {
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path)
+
+	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +53,7 @@ func TestRejectInvalidLogRetentionDays(t *testing.T) {
 	if err := os.WriteFile(path, []byte("log-retention-days -1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
+	if _, err := config.Load(path); err == nil {
 		t.Fatal("expected invalid log-retention-days error")
 	}
 }
@@ -68,7 +71,7 @@ func TestRejectInvalidActiveExpireOptions(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Load(path); err == nil {
+		if _, err := config.Load(path); err == nil {
 			t.Fatalf("expected error for %q", content)
 		}
 	}
