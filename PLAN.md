@@ -28,13 +28,13 @@ XRocksCache 是轻量级、单机、Redis RESP 兼容的 String K/V 缓存服务
 9. 增加 RocksDB 专用测试，覆盖 TTL 不可见、重启恢复、条件 SET、KEEPTTL、大 value、Stats/INFO 形态和磁盘水位线。
 10. 将 `DBSIZE` 在 RocksDB 构建中改为近似值，避免 100G 数据下全库扫描。
 11. 将普通 `SET` 改为无条件直接写入，只有 `NX`、`XX`、`GET`、`KEEPTTL` 等语义需要时才读取旧值。
-12. 将磁盘水位线接入写路径：warn 记录告警，slowdown 短暂降速，reject 拒绝新增 key 并允许覆盖已有 key。
+12. 磁盘水位线和实时可用空间保护覆盖全部写路径：warn 告警，slowdown 降速，reject 拒绝新增版本（包含覆盖写入），保留删除能力。
 13. 删除旧 AOF + 内存 Store，以及无 RocksDB 库时的显式失败占位实现；`internal/store` 现在只保留直接依赖 cgo + RocksDB 的生产 Store，默认构建即直接使用 RocksDB，不再需要 `rocksdb` build tag。
 14. 将主模块 Go 测试统一移动到 `test/` 目录，server 测试改为真实 RESP/TCP 黑盒测试。
 
 ## 当前重点
 
-- 继续收敛 RocksDB 并发语义，减少命令层全局锁范围。
+- 持续验证分片锁的并发语义、真实 Blob 回收和资源受限环境下的长时间运行。
 - 扩展端到端 Redis 协议兼容测试覆盖面。
 - 在真实 2C4G / 4C8G 云服务器上重新压测 10k QPS、100ms RT 基线。
 - 根据压测结果决定是否增加更细粒度的磁盘水位策略和 compaction 观测指标。

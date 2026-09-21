@@ -112,12 +112,14 @@ func runXRCBench(t *testing.T, args ...string) {
 }
 
 type fakeRESPServer struct {
-	t        *testing.T
-	listener net.Listener
-	mu       sync.Mutex
-	values   map[string][]byte
-	conns    map[net.Conn]struct{}
-	wg       sync.WaitGroup
+	rejectWrites bool
+	delay        time.Duration
+	t            *testing.T
+	listener     net.Listener
+	mu           sync.Mutex
+	values       map[string][]byte
+	conns        map[net.Conn]struct{}
+	wg           sync.WaitGroup
 }
 
 func newFakeRESPServer(t *testing.T) *fakeRESPServer {
@@ -188,11 +190,21 @@ func (s *fakeRESPServer) serve(conn net.Conn) {
 		if len(args) == 0 {
 			return
 		}
+		s.mu.Lock()
+		rejectWrites, delay := s.rejectWrites, s.delay
+		s.mu.Unlock()
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 
 		switch strings.ToUpper(string(args[0])) {
 		case "AUTH", "PING":
 			_, err = writer.WriteString("+OK\r\n")
 		case "SET":
+			if rejectWrites {
+				_, err = writer.WriteString("-ERR rejected\r\n")
+				break
+			}
 			if len(args) < 3 {
 				_, err = writer.WriteString("-ERR wrong number of arguments\r\n")
 				break

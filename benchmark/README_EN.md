@@ -6,6 +6,8 @@ This directory validates XRocksCache capacity, QPS, and latency boundaries on lo
 
 ## Tools
 
+`qps` and `attempted_qps` use actual measurement elapsed time, including the final in-flight request, recorded as `elapsed_seconds`. Target-rate mode stops sending accumulated work after the window ends while measuring latency from scheduled send time. Under overload, actual throughput falls below the target. Loading counts a batch only after successful responses; reconnecting is not a successful write.
+
 - `xrcbench load`: load data across a deterministic key range.
 - `xrcbench run`: run GET/SET benchmarks and output QPS, p50/p95/p99/p999, errors, misses, and time-series JSON.
 - `run_case.sh`: run a matrix for one dataset and value size.

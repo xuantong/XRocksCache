@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,18 @@ func (s *Server) execute(w *resp.Writer, args []string, authenticated *bool) boo
 	case "AUTH":
 		s.auth(w, args, authenticated)
 	case "HELLO":
-		*authenticated = s.cfg.RequirePass == ""
+		if len(args) > 1 && args[1] != "2" {
+			_ = w.Error("NOPROTO only RESP2 is supported")
+			return false
+		}
+		if len(args) > 2 {
+			_ = w.Error("ERR unsupported HELLO options; use AUTH first")
+			return false
+		}
+		if !*authenticated {
+			_ = w.Error("NOAUTH Authentication required.")
+			return false
+		}
 		_ = w.ArrayLen(6)
 		_ = w.BulkString("server")
 		_ = w.BulkString("xrockscache")
@@ -98,7 +110,8 @@ func (s *Server) auth(w *resp.Writer, args []string, authenticated *bool) {
 		return
 	}
 	password := args[len(args)-1]
-	if password != s.cfg.RequirePass {
+	*authenticated = false
+	if password != s.cfg.RequirePass || (len(args) == 3 && args[1] != "default") {
 		_ = w.Error("WRONGPASS invalid username-password pair or user is disabled.")
 		return
 	}
@@ -111,7 +124,12 @@ func (s *Server) get(w *resp.Writer, args []string) {
 		_ = w.Error("ERR wrong number of arguments for 'get' command")
 		return
 	}
-	if value, ok := s.store.Get(args[1]); ok {
+	value, ok, err := s.store.GetWithError(args[1])
+	if err != nil {
+		_ = w.Error("ERR " + err.Error())
+		return
+	}
+	if ok {
 		_ = w.BulkBytes(value)
 	} else {
 		_ = w.Nil()
@@ -123,9 +141,18 @@ func (s *Server) mget(w *resp.Writer, args []string) {
 		_ = w.Error("ERR wrong number of arguments for 'mget' command")
 		return
 	}
+	if len(args) > 65 {
+		_ = w.Error("ERR MGET supports at most 64 keys")
+		return
+	}
+	values, found, err := s.store.MGet(args[1:])
+	if err != nil {
+		_ = w.Error("ERR " + err.Error())
+		return
+	}
 	_ = w.ArrayLen(len(args) - 1)
-	for _, key := range args[1:] {
-		if value, ok := s.store.Get(key); ok {
+	for i, value := range values {
+		if found[i] {
 			_ = w.BulkBytes(value)
 		} else {
 			_ = w.Nil()
@@ -139,8 +166,15 @@ func (s *Server) set(w *resp.Writer, args []string) {
 		return
 	}
 	opts := store.SetOptions{}
+	seen := make(map[string]bool)
 	for i := 3; i < len(args); i++ {
-		switch strings.ToUpper(args[i]) {
+		option := strings.ToUpper(args[i])
+		if seen[option] {
+			_ = w.Error("ERR syntax error")
+			return
+		}
+		seen[option] = true
+		switch option {
 		case "EX":
 			i++
 			if i >= len(args) {
@@ -148,8 +182,8 @@ func (s *Server) set(w *resp.Writer, args []string) {
 				return
 			}
 			n, err := strconv.ParseInt(args[i], 10, 64)
-			if err != nil || n <= 0 {
-				_ = w.Error("ERR invalid expire time")
+			if err != nil || n <= 0 || n > int64(store.MaxTTL/time.Second) {
+				_ = w.Error("ERR invalid expire time; ttl exceeds 15 days or is not positive")
 				return
 			}
 			opts.TTL = time.Duration(n) * time.Second
@@ -160,8 +194,8 @@ func (s *Server) set(w *resp.Writer, args []string) {
 				return
 			}
 			n, err := strconv.ParseInt(args[i], 10, 64)
-			if err != nil || n <= 0 {
-				_ = w.Error("ERR invalid expire time")
+			if err != nil || n <= 0 || n > int64(store.MaxTTL/time.Millisecond) {
+				_ = w.Error("ERR invalid expire time; ttl exceeds 15 days or is not positive")
 				return
 			}
 			opts.TTL = time.Duration(n) * time.Millisecond
@@ -177,6 +211,10 @@ func (s *Server) set(w *resp.Writer, args []string) {
 			_ = w.Error("ERR syntax error")
 			return
 		}
+	}
+	if (seen["NX"] && seen["XX"]) || (seen["EX"] && seen["PX"]) || (seen["KEEPTTL"] && (seen["EX"] || seen["PX"])) {
+		_ = w.Error("ERR syntax error")
+		return
 	}
 	old, stored, err := s.store.Set(args[1], []byte(args[2]), opts)
 	if err != nil {
@@ -232,7 +270,12 @@ func (s *Server) exists(w *resp.Writer, args []string) {
 		_ = w.Error("ERR wrong number of arguments for 'exists' command")
 		return
 	}
-	_ = w.Integer(s.store.Exists(args[1:]...))
+	n, err := s.store.ExistsWithError(args[1:]...)
+	if err != nil {
+		_ = w.Error("ERR " + err.Error())
+		return
+	}
+	_ = w.Integer(n)
 }
 
 func (s *Server) expire(w *resp.Writer, args []string, unit time.Duration) {
@@ -241,9 +284,12 @@ func (s *Server) expire(w *resp.Writer, args []string, unit time.Duration) {
 		return
 	}
 	n, err := strconv.ParseInt(args[2], 10, 64)
-	if err != nil || n <= 0 {
+	if err != nil || n > int64(store.MaxTTL/unit) {
 		_ = w.Error("ERR invalid expire time")
 		return
+	}
+	if n < 0 {
+		n = 0
 	}
 	ok, err := s.store.Expire(args[1], time.Duration(n)*unit)
 	if err != nil {
@@ -262,7 +308,11 @@ func (s *Server) ttl(w *resp.Writer, args []string, unit time.Duration) {
 		_ = w.Error("ERR wrong number of arguments for ttl command")
 		return
 	}
-	ttl, exists, hasTTL := s.store.TTL(args[1])
+	ttl, exists, hasTTL, err := s.store.TTLWithError(args[1])
+	if err != nil {
+		_ = w.Error("ERR " + err.Error())
+		return
+	}
 	if !exists {
 		_ = w.Integer(-2)
 		return
@@ -318,6 +368,10 @@ active_expire_interval_seconds:%s
 active_expire_cycle_budget_ms:%s
 active_expire_max_deletes_per_cycle:%s
 `, s.version, int64(time.Since(s.started)/time.Second), s.active.Load(), stats["keys"], stats["expires"], stats["max_key"], stats["max_value"], stats["max_ttl_sec"], stats["aof_path"], stats["rocksdb_path"], stats["rocksdb_estimate_live_data_size"], stats["rocksdb_pending_compaction_bytes"], stats["rocksdb_auto_tuned"], stats["rocksdb_compression"], stats["rocksdb_disk_budget_bytes"], stats["rocksdb_memory_budget_bytes"], stats["rocksdb_block_cache_bytes"], stats["rocksdb_write_buffer_bytes"], stats["rocksdb_target_file_size_bytes"], stats["rocksdb_blob_files_enabled"], stats["rocksdb_min_blob_size_bytes"], stats["rocksdb_blob_file_size_bytes"], stats["rocksdb_blob_gc_enabled"], stats["rocksdb_max_background_jobs"], stats["rocksdb_max_subcompactions"], stats["rocksdb_soft_pending_bytes"], stats["rocksdb_hard_pending_bytes"], stats["rocksdb_rate_limiter_bytes_sec"], stats["rocksdb_periodic_compaction_sec"], stats["disk_warn_watermark_bytes"], stats["disk_slowdown_watermark_bytes"], stats["disk_reject_watermark_bytes"], stats["active_expire_enabled"], stats["active_expire_bucket_seconds"], stats["active_expire_interval_seconds"], stats["active_expire_cycle_budget_ms"], stats["active_expire_max_deletes_cycle"])
+	for _, key := range []string{"disk_usage_bytes", "disk_free_bytes", "disk_reserve_bytes", "disk_sample_failed", "rocksdb_background_errors", "rocksdb_oldest_sst_age_sec", "rocksdb_immutable_memtables", "rocksdb_num_running_compactions", "rocksdb_num_running_flushes", "rocksdb_memtable_bytes", "rocksdb_l0_files"} {
+		body += key + ":" + stats[key] + "\r\n"
+	}
+	body += "write_rate_bytes_sec:" + stats["write_rate_bytes_sec"] + "\r\n"
 	_ = w.BulkString(body)
 }
 
@@ -357,7 +411,7 @@ func (s *Server) incrByArg(w *resp.Writer, args []string, sign int64) {
 		return
 	}
 	delta, err := strconv.ParseInt(args[2], 10, 64)
-	if err != nil {
+	if err != nil || (sign == -1 && delta == math.MinInt64) {
 		_ = w.Error("ERR value is not an integer or out of range")
 		return
 	}

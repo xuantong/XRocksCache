@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 这个脚本刻意放在用户配置面之外。
 # 它用于在 WSL/Linux 下验证生产 RocksDB 构建路径，
-# 同时让 Windows 默认开发构建保持轻依赖。
+# 默认构建直接依赖 RocksDB，不再生成占位程序。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -24,7 +24,8 @@ cmake -S "${ROCKSDB_DIR}" \
   -B "${ROCKSDB_BUILD_DIR}" \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DROCKSDB_BUILD_SHARED=ON \
+  -DROCKSDB_BUILD_SHARED=OFF \
+  -DPORTABLE=ON \
   -DWITH_LZ4=ON \
   -DWITH_ZSTD=OFF \
   -DWITH_SNAPPY=OFF \
@@ -53,4 +54,5 @@ export CGO_LDFLAGS="-L${ROCKSDB_BUILD_DIR} ${LIBROCKSDB_A} -lstdc++ -lm -llz4 -l
 
 cd "${PROJECT_DIR}"
 echo "using ${LIBROCKSDB_A}"
-go build -tags rocksdb -trimpath -o build/xrockscache ./cmd/xrockscache
+# 外部静态库更新不一定改变 Go 缓存键，强制重新链接完整生产程序。
+go build -a -trimpath -ldflags "-X main.version=${XRC_VERSION:-0.2.1-go}" -o build/xrockscache ./cmd/xrockscache

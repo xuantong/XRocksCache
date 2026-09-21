@@ -1,6 +1,6 @@
 # XRocksCache
 
-XRocksCache 是一个轻量级、单机、Redis RESP 兼容的 String K/V 缓存服务，目标是在低成本 2C4G / 4C8G 云服务器上提供大容量本地磁盘缓存能力。
+XRocksCache 是一个轻量级、单机、Redis RESP 兼容的 String K/V 缓存服务。当前生产上线基线为阿里云 `cloud_essd / PL1`，优先验证 4C8G、100GiB 数据盘；PL0 不在上线支持范围内。
 
 当前生产存储路径使用 RocksDB。XRocksCache 不自研 segment、SST 或 blob 文件格式，而是把 WAL、memtable、SST、blob files、compaction 和 blob GC 交给 RocksDB。
 
@@ -18,6 +18,8 @@ XRocksCache 是一个轻量级、单机、Redis RESP 兼容的 String K/V 缓存
 - 配置策略：主配置只保留业务参数，RocksDB 细节由程序根据 CPU、内存和数据盘剩余空间自动计算
 
 ## 构建
+
+资源限制、升级注意事项与待完成的环境验收见 [部署边界与上线验收](docs/production-readiness.md)。测试通过不代表 100G / 1 万 QPS / 100ms 目标已验收。
 
 `go build`/`go test` 默认直接使用 RocksDB，不需要额外 build tag，但必须满足 `CGO_ENABLED=1` 且能找到 RocksDB 头文件和链接库：
 

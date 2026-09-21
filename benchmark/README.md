@@ -6,6 +6,8 @@
 
 ## 工具
 
+`qps` 与 `attempted_qps` 按实际测量耗时（含最后一个在途请求）计算，`elapsed_seconds` 记录该耗时。目标速率模式在窗口结束后停止补发积压请求，延迟仍从计划发送时刻计算；过载时实际吞吐会低于目标值。预加载只有收到批次成功响应后才计数，重连成功不代表写入成功。
+
 - `xrcbench load`：按确定性 key 范围装载数据。
 - `xrcbench run`：执行 GET/SET 压测，输出 QPS、p50/p95/p99/p999、错误数、miss 数和时间序列 JSON。
 - `run_case.sh`：按一个数据集/value 大小运行矩阵。

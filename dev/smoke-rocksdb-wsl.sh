@@ -30,6 +30,16 @@ fi
 
 cd "${PROJECT_DIR}"
 
+# 只向本次启动的实例写入测试 key，绝不复用端口上已有的服务。
+if [[ ! "${PORT}" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+  echo "测试端口不合法" >&2
+  exit 1
+fi
+if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+  echo "测试端口已被占用，拒绝向已有服务写入测试数据" >&2
+  exit 1
+fi
+
 "${SERVER_BIN}" \
   -c xrockscache.conf \
   -dir "${DATA_DIR}" \
@@ -40,7 +50,7 @@ SERVER_PID="$!"
 
 READY=0
 for _ in $(seq 1 50); do
-  if redis-cli -h 127.0.0.1 -p "${PORT}" --raw PING >/dev/null 2>&1; then
+  if grep -q 'server listening' "${SERVER_LOG}" && [[ "$(redis-cli -h 127.0.0.1 -p "${PORT}" --raw PING 2>/dev/null)" == PONG ]]; then
     READY=1
     break
   fi
@@ -61,21 +71,43 @@ run() {
   redis-cli -h 127.0.0.1 -p "${PORT}" --raw "$@"
 }
 
+# 必须断言返回值；redis-cli 默认不会把所有协议错误映射为非零退出码。
+expect() {
+  local expected="$1"
+  shift
+  local actual
+  actual="$(redis-cli -h 127.0.0.1 -p "${PORT}" --raw "$@")"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "命令 $1 返回不符合预期：${actual}" >&2
+    exit 1
+  fi
+}
+
 echo "data_dir=${DATA_DIR}"
 echo "server_pid=${SERVER_PID}"
 
-run PING
-run SET smoke:hello world EX 60
-run GET smoke:hello
+expect PONG PING
+expect OK SET smoke:hello world EX 60
+expect world GET smoke:hello
 
-run SET smoke:ttl alive EX 3
-run GET smoke:ttl
+expect OK SET smoke:ttl alive EX 3
+expect alive GET smoke:ttl
 run TTL smoke:ttl
 sleep 4
-run GET smoke:ttl
-run TTL smoke:ttl
+expect '' GET smoke:ttl
+expect -2 TTL smoke:ttl
 
-run SET smoke:persist 1
+expect OK SET smoke:counter 41 PX 1
+sleep 0.1
+expect 1 INCRBY smoke:counter 1
+expect 1 GET smoke:counter
+counter_ttl="$(redis-cli -h 127.0.0.1 -p "${PORT}" --raw TTL smoke:counter)"
+if [[ ! "${counter_ttl}" =~ ^[0-9]+$ ]] || (( counter_ttl < 1295940 || counter_ttl > 1296000 )); then
+  echo "过期计数器重建后 TTL 异常：${counter_ttl}" >&2
+  exit 1
+fi
+
+expect OK SET smoke:persist 1
 run DBSIZE
 run INFO
 
@@ -84,3 +116,8 @@ find "${DATA_DIR}/rocksdb" -maxdepth 1 -type f -printf "%f %s\n" | sort
 
 echo "server_log_tail="
 tail -n 20 "${SERVER_LOG}"
+
+kill -TERM "${SERVER_PID}"
+wait "${SERVER_PID}"
+SERVER_PID=""
+echo "真实命令与正常退出检查通过"

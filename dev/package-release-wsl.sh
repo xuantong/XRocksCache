@@ -6,7 +6,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-VERSION="${XRC_VERSION:-0.2.0-go}"
+VERSION="${XRC_VERSION:-0.2.1-go}"
+if [[ ! "${VERSION}" =~ ^[A-Za-z0-9._-]+$ || "$(uname -m)" != x86_64 ]]; then
+  echo "版本号不合法或当前架构不是 x86_64" >&2
+  exit 1
+fi
 OS_ARCH="linux-amd64"
 DIST_DIR="${PROJECT_DIR}/dist"
 PACKAGE_NAME="xrockscache-${VERSION}-${OS_ARCH}"
@@ -15,6 +19,8 @@ STAGE_DIR="${DIST_DIR}/${PACKAGE_NAME}"
 cd "${PROJECT_DIR}"
 
 bash dev/build-rocksdb-wsl.sh
+bash dev/test-rocksdb-wsl.sh -race
+bash dev/smoke-rocksdb-wsl.sh
 
 mkdir -p "${DIST_DIR}"
 if [[ "${STAGE_DIR}" != "${DIST_DIR}/"* || "${PACKAGE_NAME}" != xrockscache-* ]]; then
@@ -31,6 +37,20 @@ mkdir -p "${STAGE_DIR}/bin" \
 
 cp build/xrockscache "${STAGE_DIR}/bin/xrockscache"
 ldd "${STAGE_DIR}/bin/xrockscache" > "${STAGE_DIR}/install/runtime-deps.txt"
+if grep -q 'not found' "${STAGE_DIR}/install/runtime-deps.txt"; then
+  echo "发布程序存在缺失的运行依赖" >&2
+  exit 1
+fi
+{
+  cat /etc/os-release
+  getconf GNU_LIBC_VERSION
+  go version
+  git rev-parse HEAD
+  git status --porcelain
+} > "${STAGE_DIR}/install/build-platform.txt"
+ROCKSDB_SOURCE="${ROCKSDB_DIR:-${PROJECT_DIR}/../rocksdb}"
+mkdir -p "${STAGE_DIR}/licenses/rocksdb"
+cp "${ROCKSDB_SOURCE}/LICENSE.Apache" "${ROCKSDB_SOURCE}/LICENSE.leveldb" "${STAGE_DIR}/licenses/rocksdb/"
 
 (
   cd benchmark
@@ -54,7 +74,10 @@ After=network.target
 Type=simple
 User=xrockscache
 Group=xrockscache
-ExecStart=/usr/local/xrockscache/bin/xrockscache -c /etc/xrockscache/xrockscache.conf
+ExecStart=/usr/local/xrockscache/bin/xrockscache -c /etc/xrockscache/xrockscache.conf -dir /var/lib/xrockscache
+WorkingDirectory=/var/lib/xrockscache
+TimeoutStopSec=40
+NoNewPrivileges=true
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
@@ -76,6 +99,12 @@ DATA_DIR="${XRC_DATA_DIR:-/var/lib/xrockscache}"
 SERVICE_FILE="/etc/systemd/system/xrockscache.service"
 PACKAGE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if [[ "${PREFIX}" != /usr/local/xrockscache || "${CONFIG_DIR}" != /etc/xrockscache || "${DATA_DIR}" != /var/lib/xrockscache ]]; then
+  echo "自动安装仅支持默认目录；自定义目录请手动安装并配置服务单元。" >&2
+  exit 1
+fi
+"${PACKAGE_DIR}/bin/xrockscache" -version
+
 if [[ "$(id -u)" != "0" ]]; then
   echo "请使用 root 或 sudo 执行安装脚本" >&2
   exit 1
@@ -86,21 +115,23 @@ if ! id xrockscache >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 "${PREFIX}/bin" "${CONFIG_DIR}" "${DATA_DIR}"
-install -m 0755 "${PACKAGE_DIR}/bin/xrockscache" "${PREFIX}/bin/xrockscache"
-install -m 0755 "${PACKAGE_DIR}/bin/xrcbench" "${PREFIX}/bin/xrcbench"
+install -m 0755 "${PACKAGE_DIR}/bin/xrockscache" "${PREFIX}/bin/xrockscache.new"
+mv -f "${PREFIX}/bin/xrockscache.new" "${PREFIX}/bin/xrockscache"
+install -m 0755 "${PACKAGE_DIR}/bin/xrcbench" "${PREFIX}/bin/xrcbench.new"
+mv -f "${PREFIX}/bin/xrcbench.new" "${PREFIX}/bin/xrcbench"
 
 if [[ ! -f "${CONFIG_DIR}/xrockscache.conf" ]]; then
-  install -m 0644 "${PACKAGE_DIR}/conf/xrockscache.conf" "${CONFIG_DIR}/xrockscache.conf"
+  install -m 0640 -o root -g xrockscache "${PACKAGE_DIR}/conf/xrockscache.conf" "${CONFIG_DIR}/xrockscache.conf"
 fi
 install -m 0644 "${PACKAGE_DIR}/conf/xrockscache-4c8g.conf" "${CONFIG_DIR}/xrockscache-4c8g.conf"
-chown -R xrockscache:xrockscache "${DATA_DIR}"
+chown xrockscache:xrockscache "${DATA_DIR}"
 
 if command -v systemctl >/dev/null 2>&1; then
   install -m 0644 "${PACKAGE_DIR}/install/xrockscache.service" "${SERVICE_FILE}"
   systemctl daemon-reload
   echo "安装完成。启动命令：systemctl enable --now xrockscache"
 else
-  echo "安装完成。当前系统未检测到 systemd，请手动启动：${PREFIX}/bin/xrockscache -c ${CONFIG_DIR}/xrockscache.conf"
+  echo "安装完成。当前系统未检测到 systemd，请手动启动：${PREFIX}/bin/xrockscache -c ${CONFIG_DIR}/xrockscache.conf -dir ${DATA_DIR}"
 fi
 INSTALL
 chmod +x "${STAGE_DIR}/install/install-linux.sh"
@@ -113,8 +144,8 @@ cat >"${STAGE_DIR}/INSTALL.md" <<'DOC'
 ## 安装
 
 ```bash
-tar -xzf xrockscache-0.2.0-go-linux-amd64.tar.gz
-cd xrockscache-0.2.0-go-linux-amd64
+tar -xzf xrockscache-0.2.1-go-linux-amd64.tar.gz
+cd xrockscache-0.2.1-go-linux-amd64
 sudo bash install/install-linux.sh
 ```
 
@@ -152,7 +183,7 @@ bin/xrockscache -c conf/xrockscache.conf -dir ./data
 ## 注意事项
 
 - 该包是 Linux x86_64 RocksDB 生产包。
-- 目标机器需要提供 RocksDB 运行依赖；如果启动时报动态库缺失，请先安装发行版的 RocksDB/LZ4 运行库。
+- 不需要独立 RocksDB 动态库；目标系统需要兼容构建基线的 C/C++ 和 LZ4 运行库，见 `install/build-platform.txt`。
 - 生产环境建议设置 `requirepass`，并把服务部署在可信内网或安全网关之后。
 DOC
 
@@ -164,8 +195,8 @@ Chinese documentation is available in [INSTALL.md](INSTALL.md).
 ## Install
 
 ```bash
-tar -xzf xrockscache-0.2.0-go-linux-amd64.tar.gz
-cd xrockscache-0.2.0-go-linux-amd64
+tar -xzf xrockscache-0.2.1-go-linux-amd64.tar.gz
+cd xrockscache-0.2.1-go-linux-amd64
 sudo bash install/install-linux.sh
 ```
 
@@ -203,13 +234,14 @@ bin/xrockscache -c conf/xrockscache.conf -dir ./data
 ## Notes
 
 - This package is the Linux x86_64 RocksDB production package.
-- The target machine must provide RocksDB runtime dependencies. If startup reports missing shared libraries, install the distribution RocksDB/LZ4 runtime libraries first.
+- No separate RocksDB shared library is required. The target must provide C/C++ and LZ4 runtimes compatible with the build baseline in `install/build-platform.txt`.
 - In production, set `requirepass` and deploy the service inside a trusted private network or behind a secure gateway.
 DOC
 
 (
   cd "${DIST_DIR}"
-  tar -czf "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}"
+  # Windows 挂载盘可能显示为 0777；归档中必须去掉组和其他用户的写权限。
+  tar --mode='u+rwX,go+rX,go-w' -czf "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}"
   sha256sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
 )
 

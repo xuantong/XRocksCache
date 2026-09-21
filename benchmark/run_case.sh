@@ -3,6 +3,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 xrcbench="${XRCBENCH:-${script_dir}/bin/xrcbench}"
+if [[ -z "${XRCBENCH:-}" && ! -x "${xrcbench}" && -x "${script_dir}/../bin/xrcbench" ]]; then
+  xrcbench="${script_dir}/../bin/xrcbench"
+fi
 
 addr="${XRC_ADDR:-127.0.0.1:6666}"
 dataset_size="${DATASET_SIZE:-10GiB}"

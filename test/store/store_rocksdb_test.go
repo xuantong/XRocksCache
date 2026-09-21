@@ -1,5 +1,3 @@
-//go:build rocksdb && cgo
-
 package store_test
 
 import (
@@ -189,9 +187,14 @@ func TestRocksDBInfoStatsShape(t *testing.T) {
 	if stats["rocksdb_pending_compaction_bytes"] == "" {
 		t.Fatalf("expected rocksdb_pending_compaction_bytes in stats: %#v", stats)
 	}
+	for _, key := range []string{"rocksdb_immutable_memtables", "rocksdb_num_running_compactions", "rocksdb_num_running_flushes", "rocksdb_memtable_bytes", "rocksdb_l0_files"} {
+		if stats[key] == "" || stats[key] == "unavailable" {
+			t.Fatalf("missing diagnostic property %s: %q", key, stats[key])
+		}
+	}
 }
 
-func TestRocksDBRejectWatermarkAllowsOverwriteOnly(t *testing.T) {
+func TestRocksDBRejectWatermarkRejectsAllWrites(t *testing.T) {
 	dir := t.TempDir()
 	normal := store.BuildRocksDBTuning(store.ResourceProfile{
 		CPUCores:      2,
@@ -230,11 +233,20 @@ func TestRocksDBRejectWatermarkAllowsOverwriteOnly(t *testing.T) {
 	if _, stored, err := reopened.Set("new", []byte("value"), store.SetOptions{}); err == nil || stored {
 		t.Fatalf("new key should be rejected above disk watermark: stored=%v err=%v", stored, err)
 	}
-	if _, stored, err := reopened.Set("existing", []byte("new"), store.SetOptions{}); err != nil || !stored {
-		t.Fatalf("existing key overwrite should be allowed above disk watermark: stored=%v err=%v", stored, err)
+	if _, stored, err := reopened.Set("existing", []byte("new"), store.SetOptions{}); err == nil || stored {
+		t.Fatalf("overwrite should be rejected: stored=%v err=%v", stored, err)
 	}
 	got, ok := reopened.Get("existing")
-	if !ok || string(got) != "new" {
+	if _, err := reopened.IncrBy("counter", 1); err == nil {
+		t.Fatal("INCR bypassed disk gate")
+	}
+	if err := reopened.MSet(map[string][]byte{"existing": []byte("v")}); err == nil {
+		t.Fatal("MSET bypassed disk gate")
+	}
+	if _, err := reopened.Expire("existing", time.Hour); err == nil {
+		t.Fatal("EXPIRE bypassed disk gate")
+	}
+	if !ok || string(got) != "old" {
 		t.Fatalf("overwrite after reject watermark = %q, %v", got, ok)
 	}
 }

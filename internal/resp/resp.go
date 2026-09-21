@@ -7,10 +7,35 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 type Reader struct {
-	r *bufio.Reader
+	r        *bufio.Reader
+	reserved int64
+}
+
+// 请求预算同时限制单连接与全部连接，认证之前同样生效。
+const MaxArguments = 1024
+const MaxBulkBytes = 1024 * 1024
+const MaxRequestBytes = 8 * 1024 * 1024
+const maxBufferedBytes = 64 * 1024 * 1024
+
+var bufferedBytes atomic.Int64
+
+// Close 释放上一次命令占用的预算，连接结束时必须调用。
+func (r *Reader) Close() { bufferedBytes.Add(-r.reserved); r.reserved = 0 }
+
+func (r *Reader) reserve(n int64) error {
+	if r.reserved+n > 2*MaxRequestBytes {
+		return fmt.Errorf("request too large")
+	}
+	if bufferedBytes.Add(n) > maxBufferedBytes {
+		bufferedBytes.Add(-n)
+		return fmt.Errorf("request memory budget exhausted")
+	}
+	r.reserved += n
+	return nil
 }
 
 func NewReader(r io.Reader) *Reader {
@@ -18,12 +43,13 @@ func NewReader(r io.Reader) *Reader {
 }
 
 func (r *Reader) ReadCommand() ([]string, error) {
+	r.Close()
 	b, err := r.r.ReadByte()
 	if err != nil {
 		return nil, err
 	}
 	if b != '*' {
-		line, err := r.r.ReadString('\n')
+		line, err := readLine(r.r)
 		if err != nil {
 			return nil, err
 		}
@@ -35,7 +61,7 @@ func (r *Reader) ReadCommand() ([]string, error) {
 		return nil, err
 	}
 	n, err := strconv.Atoi(line)
-	if err != nil || n < 0 {
+	if err != nil || n < 0 || n > MaxArguments {
 		return nil, fmt.Errorf("invalid array length")
 	}
 	args := make([]string, 0, n)
@@ -52,8 +78,11 @@ func (r *Reader) ReadCommand() ([]string, error) {
 			return nil, err
 		}
 		size, err := strconv.Atoi(line)
-		if err != nil || size < 0 {
+		if err != nil || size < 0 || size > MaxBulkBytes {
 			return nil, fmt.Errorf("invalid bulk string length")
+		}
+		if err := r.reserve(int64(2 * (size + 2))); err != nil {
+			return nil, err
 		}
 		buf := make([]byte, size+2)
 		if _, err := io.ReadFull(r.r, buf); err != nil {
@@ -68,9 +97,12 @@ func (r *Reader) ReadCommand() ([]string, error) {
 }
 
 func readLine(r *bufio.Reader) (string, error) {
-	line, err := r.ReadBytes('\n')
+	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return "", err
+	}
+	if len(line) > 4096 {
+		return "", fmt.Errorf("protocol line too long")
 	}
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	line = bytes.TrimSuffix(line, []byte{'\r'})
@@ -95,6 +127,8 @@ func (w *Writer) SimpleString(s string) error {
 }
 
 func (w *Writer) Error(s string) error {
+	// 错误中的用户输入不能注入额外 RESP 行。
+	s = strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
 	_, err := fmt.Fprintf(w.w, "-%s\r\n", s)
 	return err
 }

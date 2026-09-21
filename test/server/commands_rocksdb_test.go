@@ -1,10 +1,9 @@
-//go:build rocksdb && cgo
-
 package server_test
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,6 +51,11 @@ func newTestServer(t *testing.T) string {
 		done <- srv.Serve(ln)
 	}()
 	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
 		_ = ln.Close()
 		select {
 		case err := <-done:
@@ -116,6 +120,30 @@ func TestStringCommands(t *testing.T) {
 	}
 }
 
+func TestExpiredCounterCommands(t *testing.T) {
+	addr := newTestServer(t)
+	for _, command := range []string{"INCR", "DECR", "INCRBY", "DECRBY"} {
+		if got := runCommand(t, addr, "SET", command, "41", "PX", "1"); got != "+OK\r\n" {
+			t.Fatal(got)
+		}
+		time.Sleep(10 * time.Millisecond)
+		args := []string{command, command}
+		if strings.HasSuffix(command, "BY") {
+			args = append(args, "1")
+		}
+		want := "1"
+		if strings.HasPrefix(command, "DECR") {
+			want = "-1"
+		}
+		if got := runCommand(t, addr, args...); got != ":"+want+"\r\n" {
+			t.Fatalf("%s: %q", command, got)
+		}
+		if got := runCommand(t, addr, "GET", command); got != fmt.Sprintf("$%d\r\n%s\r\n", len(want), want) {
+			t.Fatalf("GET after %s: %q", command, got)
+		}
+	}
+}
+
 func TestTTLUpperBound(t *testing.T) {
 	addr := newTestServer(t)
 	got := runCommand(t, addr, "SET", "k", "v", "EX", "1296001")
@@ -126,9 +154,54 @@ func TestTTLUpperBound(t *testing.T) {
 
 func TestValueUpperBound(t *testing.T) {
 	addr := newTestServer(t)
-	tooLarge := strings.Repeat("v", store.MaxValueBytes+1)
-	got := runCommand(t, addr, "SET", "k", tooLarge)
-	if !strings.Contains(got, "value exceeds 1MiB") {
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	// 只发送长度声明，验证分配和读取负载之前就被拒绝。
+	fmt.Fprintf(conn, "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$%d\r\n", store.MaxValueBytes+1)
+	got, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "invalid bulk string length") {
 		t.Fatalf("expected value limit error, got %q", got)
+	}
+}
+
+func TestNumericAndTTLEdges(t *testing.T) {
+	addr := newTestServer(t)
+	for _, args := range [][]string{
+		{"SET", "k", "v", "EX", "288230376151711744"},
+		{"SET", "k", "v", "PX", "9223372036854775807"},
+		{"SET", "k", "v", "NX", "XX"},
+		{"SET", "k", "v", "KEEPTTL", "EX", "1"},
+		{"DECRBY", "k", "-9223372036854775808"},
+	} {
+		if got := runCommand(t, addr, args...); !strings.HasPrefix(got, "-ERR") {
+			t.Fatalf("%v: %q", args, got)
+		}
+	}
+	if got := runCommand(t, addr, "SET", "k", "v"); got != "+OK\r\n" {
+		t.Fatal(got)
+	}
+	if got := runCommand(t, addr, "EXPIRE", "k", "0"); got != ":1\r\n" {
+		t.Fatal(got)
+	}
+	if got := runCommand(t, addr, "GET", "k"); got != "$-1\r\n" {
+		t.Fatal(got)
+	}
+}
+
+func TestCommandArgumentAndUnknownCommandErrors(t *testing.T) {
+	addr := newTestServer(t)
+	for _, args := range [][]string{
+		{"GET"}, {"SET", "k"}, {"MGET"}, {"EXPIRE", "k"}, {"NOT_A_COMMAND"},
+	} {
+		if got := runCommand(t, addr, args...); !strings.HasPrefix(got, "-ERR") {
+			t.Fatalf("%v accepted: %q", args, got)
+		}
 	}
 }

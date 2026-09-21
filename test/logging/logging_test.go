@@ -3,11 +3,43 @@ package logging_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"xrockscache/internal/logging"
 )
+
+func TestFileLoggerSizeRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "xrockscache-"+time.Now().Format(time.DateOnly)+".log")
+	// 预置稀疏日志到轮转边界，避免测试重复输出大量文本。
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(16 * 1024 * 1024); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	logger, closer, err := logging.New(logging.Config{Dir: dir, RetentionDays: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("rotated")
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backup := strings.TrimSuffix(path, ".log") + ".1.log"
+	info, err := os.Stat(backup)
+	if err != nil || info.Size() != 16*1024*1024 {
+		t.Fatalf("backup: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), "rotated") {
+		t.Fatalf("new log: %v", err)
+	}
+}
 
 func TestNewFileLogger(t *testing.T) {
 	dir := t.TempDir()

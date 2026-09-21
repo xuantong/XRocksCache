@@ -74,6 +74,12 @@ def classify_gate(data, base_status):
         return "FAIL_INVALID"
     if data.get("attempted_qps", 0) < 9900 or data.get("qps", 0) < 9900:
         return "FAIL_QPS"
+    if not data.get("intervals"):
+        return "FAIL_NO_INTERVALS"
+    if nested(data, "get", "p99_ms", default=0) > 100:
+        return "FAIL_GET_P99"
+    if nested(data, "set", "p99_ms", default=0) > 100:
+        return "FAIL_SET_P99"
     for interval in data.get("intervals", []):
         if nested(interval, "get", "p99_ms", default=0) > 100:
             return "FAIL_GET_P99"

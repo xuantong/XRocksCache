@@ -1,0 +1,93 @@
+# test log
+getenv PATHEXT
+getenv NoDefaultCurrentDirectoryInExePath
+stat go.com
+stat go.exe
+stat go.bat
+stat go.cmd
+stat go.vbs
+stat go.vbe
+stat go.js
+stat go.jse
+stat go.wsf
+stat go.wsh
+stat go.msc
+stat go.cpl
+getenv path
+stat D:\Program Files\Go\bin\go.com
+stat D:\Program Files\Go\bin\go.exe
+getenv PATHEXT
+open NUL
+open D:\Program Files\Go\bin\go.exe
+stat ..\..\benchmark
+getenv GOTMPDIR
+getenv PATHEXT
+getenv NoDefaultCurrentDirectoryInExePath
+stat go.com
+stat go.exe
+stat go.bat
+stat go.cmd
+stat go.vbs
+stat go.vbe
+stat go.js
+stat go.jse
+stat go.wsf
+stat go.wsh
+stat go.msc
+stat go.cpl
+getenv path
+stat D:\Program Files\Go\bin\go.com
+stat D:\Program Files\Go\bin\go.exe
+getenv PATHEXT
+open NUL
+open D:\Program Files\Go\bin\go.exe
+stat ..\..\benchmark
+open C:\Users\aaa99\AppData\Local\Temp\TestOverloadedRunReportsActualThroughput169193549\001\run.json
+open C:\Users\aaa99\AppData\Local\Temp
+getenv GOTMPDIR
+getenv PATHEXT
+getenv NoDefaultCurrentDirectoryInExePath
+stat go.com
+stat go.exe
+stat go.bat
+stat go.cmd
+stat go.vbs
+stat go.vbe
+stat go.js
+stat go.jse
+stat go.wsf
+stat go.wsh
+stat go.msc
+stat go.cpl
+getenv path
+stat D:\Program Files\Go\bin\go.com
+stat D:\Program Files\Go\bin\go.exe
+getenv PATHEXT
+open NUL
+open D:\Program Files\Go\bin\go.exe
+stat ..\..\benchmark
+open C:\Users\aaa99\AppData\Local\Temp\TestXRCBenchLoadAndRunAgainstRESPServer639040502\001\load.json
+stat C:\Users\aaa99\AppData\Local\Temp\TestXRCBenchLoadAndRunAgainstRESPServer639040502
+getenv PATHEXT
+getenv NoDefaultCurrentDirectoryInExePath
+stat go.com
+stat go.exe
+stat go.bat
+stat go.cmd
+stat go.vbs
+stat go.vbe
+stat go.js
+stat go.jse
+stat go.wsf
+stat go.wsh
+stat go.msc
+stat go.cpl
+getenv path
+stat D:\Program Files\Go\bin\go.com
+stat D:\Program Files\Go\bin\go.exe
+getenv PATHEXT
+open NUL
+open D:\Program Files\Go\bin\go.exe
+stat ..\..\benchmark
+open C:\Users\aaa99\AppData\Local\Temp\TestXRCBenchLoadAndRunAgainstRESPServer639040502\002\run.json
+open C:\Users\aaa99\AppData\Local\Temp

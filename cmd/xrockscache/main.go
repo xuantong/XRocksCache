@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"runtime/debug"
+	"syscall"
 	"time"
 
 	"xrockscache/internal/config"
@@ -12,9 +17,17 @@ import (
 	"xrockscache/internal/store"
 )
 
-const version = "0.2.0-go"
+var version = "0.2.1-go"
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("xrockscache stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run 将退出码处理放到外层，确保错误返回和信号退出都执行资源清理。
+func run() error {
 	var configPath string
 	var showVersion bool
 	var bind string
@@ -32,13 +45,13 @@ func main() {
 
 	if showVersion {
 		_, _ = os.Stdout.WriteString("xrockscache " + version + "\n")
-		return
+		return nil
 	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("load config failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	visited := map[string]bool{}
@@ -55,6 +68,9 @@ func main() {
 	if visited["requirepass"] {
 		cfg.RequirePass = requirePass
 	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return fmt.Errorf("invalid port")
+	}
 
 	logger, logCloser, err := logging.New(logging.Config{
 		Dir:           cfg.LogDir,
@@ -64,11 +80,12 @@ func main() {
 	})
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("init logger failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer logCloser.Close()
 
 	logger.Info("starting xrockscache",
+		"disk_type", cfg.DiskType, "disk_pl", cfg.DiskPL, "disk_capacity_gib", cfg.DiskCapacityGiB,
 		"version", version,
 		"config", configPath,
 		"bind", cfg.Bind,
@@ -78,14 +95,18 @@ func main() {
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
 		"log_retention_days", cfg.LogRetentionDays,
-		"active_expire_enabled", cfg.ActiveExpireEnabled,
-		"active_expire_bucket_seconds", cfg.ActiveExpireBucketSeconds,
-		"active_expire_interval_seconds", cfg.ActiveExpireIntervalSeconds,
-		"active_expire_cycle_budget_ms", cfg.ActiveExpireCycleBudgetMilliseconds,
-		"active_expire_max_deletes_per_cycle", cfg.ActiveExpireMaxDeletesPerCycle,
+		"expiration_strategy", "rocksdb_compaction_filter",
 	)
+	if cfg.ActiveExpireEnabled {
+		logger.Warn("legacy active expiration settings are ignored; RocksDB compaction controls physical reclamation")
+	}
 
-	rocksTuning := store.BuildRocksDBTuning(store.DetectResourceProfile(cfg.Dir))
+	profile := store.DetectResourceProfile(cfg.Dir)
+	// 此限制只覆盖 Go 堆，RocksDB 的 C/C++ 内存另由引擎预算管理。
+	if profile.MemoryBytes > 0 && os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(int64(profile.MemoryBytes / 5))
+	}
+	rocksTuning := store.BuildRocksDBTuning(profile)
 	logger.Info("rocksdb tuning calculated",
 		"auto_tuned", rocksTuning.AutoTuned,
 		"compression", rocksTuning.Compression,
@@ -110,25 +131,32 @@ func main() {
 	)
 
 	kv, err := store.OpenWithOptions(cfg.Dir, store.Options{
-		Expiration: store.ExpirationConfig{
-			Enabled:            cfg.ActiveExpireEnabled,
-			BucketSize:         time.Duration(cfg.ActiveExpireBucketSeconds) * time.Second,
-			Interval:           time.Duration(cfg.ActiveExpireIntervalSeconds) * time.Second,
-			CycleBudget:        time.Duration(cfg.ActiveExpireCycleBudgetMilliseconds) * time.Millisecond,
-			MaxDeletesPerCycle: cfg.ActiveExpireMaxDeletesPerCycle,
-		},
-		Tuning: rocksTuning,
-		Logger: logger,
+		WriteRateMiB: cfg.WriteRateMiB,
+		Tuning:       rocksTuning,
+		Logger:       logger,
 	})
 	if err != nil {
 		logger.Error("open store failed", "error", err, "dir", cfg.Dir)
-		os.Exit(1)
+		return err
 	}
 	defer kv.Close()
 
 	srv := server.New(cfg, kv, version, logger)
-	if err := srv.ListenAndServe(); err != nil {
-		logger.Error("server stopped", "error", err)
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServe() }()
+	var serveErr error
+	select {
+	case <-ctx.Done():
+	case serveErr = <-done:
 	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("shutdown timed out", "error", err)
+		return err
+	}
+	logger.Info("server stopped")
+	return serveErr
 }

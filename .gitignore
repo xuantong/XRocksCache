@@ -56,3 +56,6 @@
 # XRocksCache benchmark artifacts
 /benchmark/bin/
 /benchmark/results/
+
+/dist/
+

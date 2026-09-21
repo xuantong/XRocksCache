@@ -15,13 +15,8 @@ const (
 	MaxTTL = 15 * 24 * time.Hour
 )
 
-type Entry struct {
-	Value     []byte
-	ExpiresAt int64
-}
-
 // SetOptions 承载命令层支持的 Redis-compatible SET 变体。
-// 只有需要旧状态的选项，才会在 RocksDB 实现中进入读改写临界区。
+// 所有写入共用分片锁；只有需要旧状态的选项才读取旧 value。
 type SetOptions struct {
 	TTL     time.Duration
 	Mode    string
@@ -30,6 +25,7 @@ type SetOptions struct {
 }
 
 type Options struct {
+	WriteRateMiB int
 	// Expiration 只保留给历史配置兼容。
 	// 生产 RocksDB 路径不使用内存过期 bucket 清理器，而是依赖读时不可见和 compaction-filter 物理清理。
 	Expiration ExpirationConfig
@@ -49,7 +45,7 @@ type ExpirationConfig struct {
 
 func DefaultExpirationConfig() ExpirationConfig {
 	return ExpirationConfig{
-		Enabled:            true,
+		Enabled:            false,
 		BucketSize:         30 * time.Second,
 		Interval:           10 * time.Second,
 		CycleBudget:        10 * time.Millisecond,

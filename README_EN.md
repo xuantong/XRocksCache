@@ -1,6 +1,6 @@
 # XRocksCache
 
-XRocksCache is a lightweight, single-node, Redis RESP-compatible String K/V cache service. It targets large local-disk cache workloads on low-cost 2C4G / 4C8G cloud servers.
+XRocksCache is a lightweight, single-node, Redis RESP-compatible String K/V cache service. The current production baseline is Alibaba Cloud `cloud_essd / PL1`, with 4C8G and a 100GiB data disk as the first validation target. PL0 is outside the supported production scope.
 
 The production storage path uses RocksDB. XRocksCache delegates WAL, memtables, SST files, blob files, compaction, and blob GC to RocksDB instead of implementing its own segment, SST, or blob file format.
 
@@ -18,6 +18,8 @@ Chinese documentation is available in [README.md](README.md).
 - Configuration strategy: the main config keeps business-facing settings, while RocksDB internals are derived automatically from CPU, memory, and data-disk free space
 
 ## Build
+
+See [deployment boundaries and release acceptance](docs/production-readiness_EN.md) for resource limits, upgrade notes, and pending environment validation. Passing tests does not establish the 100G / 10k QPS / 100ms targets.
 
 `go build`/`go test` use RocksDB by default, no extra build tag needed — but `CGO_ENABLED=1` and a discoverable RocksDB header/library are required:
 

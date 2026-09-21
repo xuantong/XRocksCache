@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,6 +9,10 @@ import (
 )
 
 type Config struct {
+	DiskType                            string
+	DiskPL                              string
+	DiskCapacityGiB                     int64
+	WriteRateMiB                        int
 	Bind                                string
 	Port                                int
 	Dir                                 string
@@ -30,6 +33,8 @@ type Config struct {
 
 func Default() Config {
 	return Config{
+		DiskType: "cloud_essd", DiskPL: "pl1", DiskCapacityGiB: 100,
+		WriteRateMiB:                        35,
 		Bind:                                "127.0.0.1",
 		Port:                                6666,
 		Dir:                                 "data",
@@ -37,7 +42,7 @@ func Default() Config {
 		LogLevel:                            "info",
 		LogFormat:                           "text",
 		LogRetentionDays:                    15,
-		ActiveExpireEnabled:                 true,
+		ActiveExpireEnabled:                 false,
 		ActiveExpireBucketSeconds:           30,
 		ActiveExpireIntervalSeconds:         10,
 		ActiveExpireCycleBudgetMilliseconds: 10,
@@ -56,9 +61,6 @@ func Load(path string) (Config, error) {
 
 	file, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return cfg, nil
-		}
 		return cfg, err
 	}
 	defer file.Close()
@@ -71,9 +73,7 @@ func Load(path string) (Config, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = strings.TrimSpace(line[:i])
-		}
+		// 只支持整行注释，避免密码中的 # 被静默截断。
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			return cfg, fmt.Errorf("%s:%d: invalid config line", path, lineNo)
@@ -82,6 +82,28 @@ func Load(path string) (Config, error) {
 		value := strings.Join(fields[1:], " ")
 
 		switch key {
+		case "disk-type":
+			if value != "cloud_essd" {
+				return cfg, fmt.Errorf("%s:%d: only cloud_essd is supported", path, lineNo)
+			}
+			cfg.DiskType = value
+		case "disk-pl":
+			if strings.ToLower(value) != "pl1" {
+				return cfg, fmt.Errorf("%s:%d: only ESSD PL1 is supported", path, lineNo)
+			}
+			cfg.DiskPL = strings.ToLower(value)
+		case "disk-capacity-gib":
+			v, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || v < 20 {
+				return cfg, fmt.Errorf("%s:%d: disk-capacity-gib must be at least 20", path, lineNo)
+			}
+			cfg.DiskCapacityGiB = v
+		case "write-rate-mib":
+			v, err := strconv.Atoi(value)
+			if err != nil || v < 1 || v > 1024 {
+				return cfg, fmt.Errorf("%s:%d: invalid write-rate-mib", path, lineNo)
+			}
+			cfg.WriteRateMiB = v
 		case "bind":
 			cfg.Bind = value
 		case "port":
@@ -151,8 +173,8 @@ func Load(path string) (Config, error) {
 		case "xrockscache-profile":
 			cfg.Profile = strings.EqualFold(value, "yes") || strings.EqualFold(value, "true") || value == "1"
 		default:
-			// 未知配置键会被有意忽略。
-			// 这样旧 profile 文件仍可读取，同时 Go 实现可以收敛历史存储细节配置面。
+			// 拼写错误必须使启动失败，尤其不能静默忽略认证配置。
+			return cfg, fmt.Errorf("%s:%d: unknown config key %q", path, lineNo, key)
 		}
 	}
 	if err := scanner.Err(); err != nil {

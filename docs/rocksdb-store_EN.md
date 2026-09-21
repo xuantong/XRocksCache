@@ -34,10 +34,17 @@ XRocksCache guarantees:
 
 - Expired keys are invisible immediately on reads.
 - `GET`, `EXISTS`, `TTL`, and `PTTL` decode `expiresAtMs`.
-- If an expired key is read, the command returns it as missing and writes a best-effort RocksDB delete.
+- Reads return expired keys as missing without an unconditional delete that could erase a newer version.
+- New SET operations without TTL, MSET, and keys created by INCRBY default to a 15-day TTL.
 - The RocksDB compaction filter physically drops expired records during background compaction.
 
 Therefore, expiration correctness does not depend on immediate compaction. Compaction only performs delayed physical reclamation.
+
+Periodic compaction is currently 12 hours: this is an eligibility interval, not a cleanup completion deadline. Physical reclamation is not guaranteed within 30–60 seconds. Legacy zero-TTL records remain readable; rebuild the cache or assign TTLs when upgrading. Never delete live SST or Blob files manually.
+
+All writes acquire fixed-size striped locks; multi-key commands acquire stripes in ascending order. Reads do not delete records, and MGET observes consistent MSET batches. Closing the database waits for storage operations before freeing C handles.
+
+WAL is enabled but individual writes are not synchronously flushed to disk. Process recovery does not imply zero loss after power failure: cache consumers must tolerate losing recent writes and rebuild from their source of truth.
 
 ## AOF removal
 
@@ -60,3 +67,7 @@ The first version does not introduce kvrocks' complex checker. It controls file 
 - XRocksCache disk watermarks
 
 These parameters are computed at startup from CPU, memory, and data-disk free space. They are not exposed in the main config file.
+
+The capacity budget includes existing database usage to avoid shrinking on restart. A background sampler checks database usage and filesystem free space every second. The reject watermark blocks all new versions, including overwrites, expiration updates, increments, and batches; deletions remain allowed. Failed samples or samples older than 10 seconds reject writes. Sampling has a time window, so reserved space and OS disk alerts remain necessary.
+
+Memory detection considers common cgroup v1/v2 limits at the current group and its ancestors. Indexes and filters share the block-cache budget; the Go heap has a separate soft limit. These budgets are not a hard process RSS limit: monitor RSS, available memory, and OOM events in the deployment environment. See [production-readiness_EN.md](production-readiness_EN.md).

@@ -79,8 +79,8 @@ func TestBuildRocksDBTuningClampsSmallDisk(t *testing.T) {
 		DiskFreeBytes: 5 * testGiB,
 	})
 
-	if tuning.DiskBudgetBytes != 10*testGiB {
-		t.Fatalf("DiskBudgetBytes = %d, want minimum %d", tuning.DiskBudgetBytes, 10*testGiB)
+	if tuning.DiskBudgetBytes != 4*testGiB {
+		t.Fatalf("DiskBudgetBytes = %d, want %d", tuning.DiskBudgetBytes, 4*testGiB)
 	}
 	if tuning.TargetFileSizeBaseBytes != 64*testMiB {
 		t.Fatalf("TargetFileSizeBaseBytes = %d, want minimum %d", tuning.TargetFileSizeBaseBytes, 64*testMiB)

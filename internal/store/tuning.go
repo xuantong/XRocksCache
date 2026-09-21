@@ -2,6 +2,8 @@ package store
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -31,6 +33,8 @@ type ResourceProfile struct {
 	// DiskFreeBytes 是数据目录所在文件系统的剩余空间。
 	// 默认缓存预算从这个值推导，而不是写死 2C4G/4C8G 模板，因为云盘差异远大于 CPU/RAM。
 	DiskFreeBytes uint64
+	// DiskUsedBytes 计入已有数据库，避免每次重启都按剩余空间缩小总预算。
+	DiskUsedBytes uint64
 
 	// DiskBudgetBytes 可选地限制推导出的缓存预算。
 	// 0 表示“使用 DiskFreeBytes 的 80%，再压到产品安全范围内”。
@@ -92,8 +96,13 @@ type RocksDBTuning struct {
 	// 它由磁盘预算推导并做上下限保护，避免小机器被 compaction 压垮。
 	RateLimiterBytesPerSec uint64
 
-	// PeriodicCompactionSeconds 防止很冷的 SST 文件永久保留过期 key。
-	// GET 仍保证过期 key 不可见；周期 compaction 只负责延迟物理清理。
+	// PeriodicCompactionSeconds 防止很冷的 SST 文件永久保留过期 key 的物理存储。
+	// GET 仍保证过期 key 不可见；这里只影响磁盘空间物理回收的时效性，不影响读路径正确性。
+	// 这不是逐 key 删除的扫描周期：到期后 RocksDB 会强制重写涉及的整份 SST，
+	// 因此不能定得像秒级主动过期那么短，否则会在 100GB 数据集上引发持续性全量重写，
+	// 拖垮 2C4G/4C8G 目标机器的写放大和尾延迟。定为 2 小时是在“冷数据不会无限期占用磁盘”
+	// 与“不给便宜机器制造额外 compaction 压力”之间的折中；配合 rocksdb_oldest_sst_age_sec
+	// 指标观察实际回收时效，如果观测到回收滞后明显可以再收紧。
 	PeriodicCompactionSeconds int64
 
 	// 水位线是 XRocksCache 业务层容量控制。
@@ -101,6 +110,8 @@ type RocksDBTuning struct {
 	DiskWarnWatermarkBytes     uint64
 	DiskSlowdownWatermarkBytes uint64
 	DiskRejectWatermarkBytes   uint64
+	// DiskReserveBytes 是实时文件系统可用空间的保护阈值，给后台回收保留余量。
+	DiskReserveBytes uint64
 }
 
 // DetectResourceProfile 读取指定数据目录对应的主机资源。
@@ -112,9 +123,21 @@ func DetectResourceProfile(dir string) ResourceProfile {
 	if mem := detectTotalMemoryBytes(); mem > 0 {
 		profile.MemoryBytes = mem
 	}
+	profile.MemoryBytes, profile.CPUCores = constrainResources(profile.MemoryBytes, profile.CPUCores)
 	if free := detectDiskFreeBytes(dir); free > 0 {
 		profile.DiskFreeBytes = free
 	}
+	if dir == "" {
+		dir = "data"
+	}
+	_ = filepath.WalkDir(filepath.Join(dir, "rocksdb"), func(_ string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() {
+			if info, err := entry.Info(); err == nil && info.Size() > 0 {
+				profile.DiskUsedBytes += uint64(info.Size())
+			}
+		}
+		return nil
+	})
 	return profile
 }
 
@@ -135,23 +158,24 @@ func BuildRocksDBTuning(profile ResourceProfile) RocksDBTuning {
 	}
 
 	diskBudget := profile.DiskBudgetBytes
-	if diskBudget == 0 || diskBudget > profile.DiskFreeBytes {
-		// 最多使用当前剩余空间的 80%，给 WAL、日志、compaction 临时输出、
+	available := profile.DiskFreeBytes + profile.DiskUsedBytes
+	if diskBudget == 0 || diskBudget > available*80/100 {
+		// 最多使用“当前剩余空间加已有数据库占用”的 80%，给临时输出、
 		// OS 元数据和运维恢复预留空间。
-		diskBudget = profile.DiskFreeBytes * 80 / 100
+		diskBudget = available * 80 / 100
 	}
-	diskBudget = clampUint64(diskBudget, 10*gib, 500*gib)
+	diskBudget = minUint64(diskBudget, 500*gib)
 
-	// RocksDB 进程侧内存上限为主机内存的 35%。
+	// RocksDB 主要缓存结构预算为有效内存的 35%，不是进程 RSS 的硬上限。
 	// 这会有意把大部分 RAM 留给 OS page cache 和非存储服务开销。
-	memoryBudget := clampUint64(profile.MemoryBytes*35/100, 512*mib, 3*gib)
+	memoryBudget := minUint64(profile.MemoryBytes*35/100, 3*gib)
 
 	// GET 延迟最依赖 block cache，写入突增需要有界的 memtable 预算。
 	// 剩余 10% 隐含留给索引、bloom filter、iterator 和 Go runtime 开销。
-	blockCacheSize := clampUint64(memoryBudget*60/100, 256*mib, 2*gib)
+	blockCacheSize := minUint64(memoryBudget*60/100, 2*gib)
 	writeBufferTotal := memoryBudget * 30 / 100
 	writeBufferSize := roundDownPowerOfTwo(writeBufferTotal / 3)
-	writeBufferSize = clampUint64(writeBufferSize, 32*mib, 256*mib)
+	writeBufferSize = minUint64(writeBufferSize, 256*mib)
 
 	// 按有效预算大约 1024 个基础层文件估算，再向上取 2 的幂，
 	// 让 RocksDB 文件大小在运维上更可预期。
@@ -193,10 +217,11 @@ func BuildRocksDBTuning(profile ResourceProfile) RocksDBTuning {
 		SoftPendingCompactionBytesLimit: softPending,
 		HardPendingCompactionBytesLimit: hardPending,
 		RateLimiterBytesPerSec:          rateLimiter,
-		PeriodicCompactionSeconds:       int64((12 * 60 * 60)),
+		PeriodicCompactionSeconds:       int64(2 * 60 * 60),
 		DiskWarnWatermarkBytes:          diskBudget * 85 / 100,
 		DiskSlowdownWatermarkBytes:      diskBudget * 90 / 100,
 		DiskRejectWatermarkBytes:        diskBudget * 95 / 100,
+		DiskReserveBytes:                minUint64(available/10, 2*gib),
 	}
 }
 

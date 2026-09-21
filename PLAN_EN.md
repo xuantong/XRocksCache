@@ -28,13 +28,13 @@ XRocksCache is a lightweight, single-node, Redis RESP-compatible String K/V cach
 9. Added RocksDB-specific tests for expiration invisibility, restart recovery, conditional SET, KEEPTTL, large values, Stats/INFO shape, and disk watermarks.
 10. Changed `DBSIZE` in the RocksDB build to return an estimate instead of scanning the whole keyspace.
 11. Changed the common `SET` path to write directly; old values are read only for `NX`, `XX`, `GET`, and `KEEPTTL`.
-12. Wired disk watermarks into writes: warn logs, slowdown delays briefly, and reject blocks new keys while allowing overwrites.
+12. Disk watermarks and live free-space protection cover all write paths: warn logs, slowdown delays, and reject blocks every new version including overwrites, while deletions remain available.
 13. Removed the old AOF plus in-memory Store and the explicit-failure stub for builds without RocksDB; `internal/store` now keeps only the production Store, which depends on cgo + RocksDB directly. The default build already uses RocksDB — the `rocksdb` build tag is no longer needed.
 14. Moved main-module Go tests into the `test/` directory and changed server tests to real RESP/TCP black-box tests.
 
 ## Current priorities
 
-- Continue tightening RocksDB concurrency semantics and reducing command-level global lock scope.
+- Continue validating striped-lock concurrency, real Blob reclamation, and sustained operation under resource limits.
 - Expand end-to-end Redis protocol compatibility test coverage.
 - Re-run 10k QPS and 100ms RT baselines on real 2C4G / 4C8G cloud servers.
 - Use benchmark results to decide whether finer disk-watermark logic and compaction observability are needed.

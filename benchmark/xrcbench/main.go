@@ -108,6 +108,8 @@ type intervalSummary struct {
 }
 
 type runResult struct {
+	// 实际耗时包含最后一个在途请求，避免把超时排空算作窗口内吞吐。
+	ElapsedSeconds       float64           `json:"elapsed_seconds"`
 	Tool                 string            `json:"tool"`
 	Version              string            `json:"version"`
 	Mode                 string            `json:"mode"`
@@ -456,7 +458,7 @@ func runLoad(args []string) error {
 				reportFirstError(errCh, fmt.Errorf("worker %d connect: %w", workerID, err))
 				return
 			}
-			defer client.close()
+			defer func() { client.close() }()
 
 			for {
 				if abort.Load() {
@@ -476,15 +478,19 @@ func runLoad(args []string) error {
 
 				var batchErr error
 				for attempt := 0; attempt < 3; attempt++ {
+					if client == nil {
+						client, batchErr = dialRESP(options.addr, options.password, options.timeout)
+						if batchErr != nil {
+							time.Sleep(100 * time.Millisecond)
+							continue
+						}
+					}
 					batchErr = client.pipelineSET(batchKeys, batchValues, options.ttl)
 					if batchErr == nil {
 						break
 					}
 					client.close()
-					client, batchErr = dialRESP(options.addr, options.password, options.timeout)
-					if batchErr != nil {
-						time.Sleep(100 * time.Millisecond)
-					}
+					client = nil
 				}
 				if batchErr != nil {
 					loadErrors.Add(end - start)
@@ -671,20 +677,23 @@ func runWorkload(args []string) error {
 	}
 	attempts := total.getAttempts + total.setAttempts
 	successful := total.get.count + total.set.count
+	completedAt := time.Now()
+	elapsed := completedAt.Sub(window.measurementStart).Seconds()
 	result := runResult{
+		ElapsedSeconds:       elapsed,
 		Tool:                 "xrcbench",
 		Version:              toolVersion,
 		Mode:                 "run",
 		StartedAt:            window.measurementStart,
-		CompletedAt:          time.Now(),
+		CompletedAt:          completedAt,
 		Config:               makeResultConfig(options.commonOptions, keys, valueBytes),
 		Attempts:             attempts,
 		SuccessfulOperations: successful,
 		Errors:               total.errors,
 		GETMisses:            total.getMisses,
 		GETHitRatio:          hitRatio(total.get.count, total.getMisses),
-		AttemptedQPS:         float64(attempts) / options.duration.Seconds(),
-		QPS:                  float64(successful) / options.duration.Seconds(),
+		AttemptedQPS:         float64(attempts) / elapsed,
+		QPS:                  float64(successful) / elapsed,
 		GET:                  total.get.summary(),
 		SET:                  total.set.summary(),
 		Intervals:            summarizeIntervals(intervals, options.duration, options.reportInterval),
@@ -737,6 +746,10 @@ func runWorker(workerID int, options runOptions, keys int64, values [][]byte, re
 
 	for {
 		var latencyStart time.Time
+		// 停止补发已过测量窗口的积压请求；延迟仍从计划发送时刻计算。
+		if !time.Now().Before(measurementEnd) {
+			break
+		}
 		if options.targetQPS > 0 {
 			globalSequence := operationIndex*int64(options.clients) + int64(workerID)
 			scheduledOffset := time.Duration(float64(globalSequence) / options.targetQPS * float64(time.Second))

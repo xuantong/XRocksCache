@@ -1,5 +1,3 @@
-//go:build rocksdb && cgo
-
 package store
 
 /*
@@ -92,6 +90,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -111,13 +110,13 @@ var valueMagic = [4]byte{'X', 'R', 'C', '1'}
 // Store 是默认构建即启用的真实 RocksDB 实现。
 // 它刻意不保留完整内存 key/value 索引：数据集、WAL、SST、blob files 和 compaction 都由 RocksDB 负责。
 type Store struct {
-	// mu 刻意不作为全局数据库锁使用。
-	// 它只保护 NX/XX/GET/KEEPTTL、EXPIRE、DEL、INCRBY 等命令层读改写语义；
-	// 简单 GET/SET/MSET 会直接进入 RocksDB。
-	mu     sync.Mutex
-	dir    string
-	tuning RocksDBTuning
-	logger *slog.Logger
+	writeLimiter *WriteLimiter
+	// 生命周期锁防止关闭 C 句柄时仍有操作；分片锁让同一 key 的全部写入串行。
+	lifecycle sync.RWMutex
+	stripes   [256]sync.Mutex
+	dir       string
+	tuning    RocksDBTuning
+	logger    *slog.Logger
 
 	// 磁盘用量会被采样并缓存。
 	// 这样写路径可以执行业务水位线控制，同时避免每次 SET 都遍历可能很大的 RocksDB 目录。
@@ -126,6 +125,11 @@ type Store struct {
 	diskUsageCheckedAt    time.Time
 	lastWatermarkLogLevel string
 	lastWatermarkLoggedAt time.Time
+	cachedDiskFreeBytes   uint64
+	diskSampleFailed      bool
+	oldestSSTAgeSeconds   int64
+	diskStop              chan struct{}
+	diskDone              chan struct{}
 
 	db               *C.rocksdb_t
 	opts             *C.rocksdb_options_t
@@ -140,6 +144,12 @@ func Open(dir string) (*Store, error) {
 }
 
 func OpenWithOptions(dir string, opts Options) (*Store, error) {
+	if opts.WriteRateMiB == 0 {
+		opts.WriteRateMiB = 35
+	}
+	if opts.WriteRateMiB < 1 || opts.WriteRateMiB > 1024 {
+		return nil, fmt.Errorf("invalid write rate")
+	}
 	if dir == "" {
 		dir = "data"
 	}
@@ -166,12 +176,13 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 	defer C.free(unsafe.Pointer(cPath))
 
 	s := &Store{
-		dir:       dbPath,
-		tuning:    tuning,
-		logger:    logger,
-		opts:      C.rocksdb_options_create(),
-		readOpts:  C.rocksdb_readoptions_create(),
-		writeOpts: C.rocksdb_writeoptions_create(),
+		writeLimiter: NewWriteLimiter(int64(opts.WriteRateMiB) * 1024 * 1024),
+		dir:          dbPath,
+		tuning:       tuning,
+		logger:       logger,
+		opts:         C.rocksdb_options_create(),
+		readOpts:     C.rocksdb_readoptions_create(),
+		writeOpts:    C.rocksdb_writeoptions_create(),
 	}
 	if s.opts == nil || s.readOpts == nil || s.writeOpts == nil {
 		s.Close()
@@ -185,6 +196,20 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 	// 这个顺序可以避免预设 helper 意外覆盖基于资源推导出的默认值。
 	C.rocksdb_options_optimize_for_point_lookup(s.opts, C.uint64_t(tuning.BlockCacheSizeBytes/mib))
 	C.rocksdb_options_optimize_level_style_compaction(s.opts, C.uint64_t(tuning.WriteBufferSizeBytes*uint64(tuning.MaxWriteBufferNumber)))
+	// 索引和过滤器也纳入块缓存预算，避免大 key 数据集在缓存之外持续占用内存。
+	tableOpts := C.rocksdb_block_based_options_create()
+	cache := C.rocksdb_cache_create_lru(C.size_t(tuning.BlockCacheSizeBytes))
+	C.rocksdb_block_based_options_set_block_cache(tableOpts, cache)
+	C.rocksdb_block_based_options_set_cache_index_and_filter_blocks(tableOpts, 1)
+	C.rocksdb_block_based_options_set_filter_policy(tableOpts, C.rocksdb_filterpolicy_create_bloom_full(10))
+	C.rocksdb_options_set_block_based_table_factory(s.opts, tableOpts)
+	C.rocksdb_block_based_options_destroy(tableOpts)
+	C.rocksdb_cache_destroy(cache)
+	C.rocksdb_options_set_max_open_files(s.opts, 256)
+	C.rocksdb_options_set_max_log_file_size(s.opts, C.size_t(16*mib))
+	C.rocksdb_options_set_keep_log_file_num(s.opts, 4)
+	// 引擎进入写停顿时返回可观测错误，不让请求无限等待后台 compaction。
+	C.rocksdb_writeoptions_set_no_slowdown(s.writeOpts, 1)
 	C.rocksdb_options_set_compression(s.opts, C.rocksdb_lz4_compression)
 	C.rocksdb_options_set_bottommost_compression(s.opts, C.rocksdb_lz4_compression)
 	C.rocksdb_options_set_compaction_style(s.opts, C.rocksdb_level_compaction)
@@ -236,11 +261,33 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("open rocksdb failed")
 	}
 
+	s.refreshDiskUsage()
+	s.diskStop, s.diskDone = make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(s.diskDone)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.diskStop:
+				return
+			case <-ticker.C:
+				s.refreshDiskUsage()
+			}
+		}
+	}()
 	logger.Info("rocksdb store opened", "dir", dbPath, "tuning", tuning.String())
 	return s, nil
 }
 
 func (s *Store) Close() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	if s.diskStop != nil {
+		close(s.diskStop)
+		<-s.diskDone
+		s.diskStop = nil
+	}
 	// 显式且幂等地销毁 C 资源。
 	// compaction filter 有自己的 no-op C 析构函数，因为 RocksDB C wrapper 会在清理时调用它，
 	// 即使 XRocksCache 没有分配 per-filter state。
@@ -267,6 +314,45 @@ func (s *Store) Close() error {
 	if s.rateLimiter != nil {
 		C.rocksdb_ratelimiter_destroy(s.rateLimiter)
 		s.rateLimiter = nil
+	}
+	return nil
+}
+
+// Flush 等待当前 memtable 落盘，供维护与落盘验收使用，不暴露为网络命令。
+func (s *Store) Flush() error {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return fmt.Errorf("ERR store closed")
+	}
+	opts := C.rocksdb_flushoptions_create()
+	defer C.rocksdb_flushoptions_destroy(opts)
+	C.rocksdb_flushoptions_set_wait(opts, 1)
+	var cErr *C.char
+	C.rocksdb_flush(s.db, opts, &cErr)
+	return takeRocksError(cErr)
+}
+
+// CompactRange 仅供显式维护与回收验收使用；空边界表示全库，不能放进普通请求路径。
+// C 接口不返回本次任务状态，因此调用方还需核查文件与后台错误，不能把返回视为回收成功。
+func (s *Store) CompactRange(start, end []byte) error {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return fmt.Errorf("ERR store closed")
+	}
+	var first, last unsafe.Pointer
+	if len(start) > 0 {
+		first = C.CBytes(start)
+		defer C.free(first)
+	}
+	if len(end) > 0 {
+		last = C.CBytes(end)
+		defer C.free(last)
+	}
+	C.rocksdb_compact_range(s.db, (*C.char)(first), C.size_t(len(start)), (*C.char)(last), C.size_t(len(end)))
+	if s.rocksPropertyInt("rocksdb.background-errors") != 0 {
+		return fmt.Errorf("ERR rocksdb background error")
 	}
 	return nil
 }
@@ -322,15 +408,39 @@ func decodeValue(encoded []byte, now time.Time) ([]byte, int64, bool, error) {
 	if expiresAt > 0 && expiresAt <= now.UnixMilli() {
 		return nil, expiresAt, true, nil
 	}
-	return append([]byte(nil), encoded[encodedHeaderBytes:]...), expiresAt, false, nil
+	value := make([]byte, valueLen)
+	copy(value, encoded[encodedHeaderBytes:])
+	return value, expiresAt, false, nil
 }
 
 func (s *Store) Set(key string, value []byte, opts SetOptions) ([]byte, bool, error) {
 	if err := validateKeyValue(key, value); err != nil {
 		return nil, false, err
 	}
+	if err := s.writeLimiter.Wait(int64(len(key) + len(value) + encodedHeaderBytes)); err != nil {
+		return nil, false, err
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return nil, false, fmt.Errorf("ERR store closed")
+	}
+	unlock := s.lockKeys([]string{key})
+	defer unlock()
+	if err := validateKeyValue(key, value); err != nil {
+		return nil, false, err
+	}
 	if err := validateTTL(opts.TTL); err != nil {
 		return nil, false, err
+	}
+	if opts.Mode != "" && opts.Mode != "NX" && opts.Mode != "XX" {
+		return nil, false, fmt.Errorf("ERR invalid SET mode")
+	}
+	if opts.KeepTTL && opts.TTL != 0 {
+		return nil, false, fmt.Errorf("ERR syntax error")
+	}
+	if opts.TTL == 0 {
+		opts.TTL = MaxTTL
 	}
 
 	now := time.Now()
@@ -352,9 +462,6 @@ func (s *Store) Set(key string, value []byte, opts SetOptions) ([]byte, bool, er
 	// 条件 SET、SET GET 和 KEEPTTL 是命令层读改写操作。
 	// RocksDB 本身是线程安全的，但如果没有命令临界区，两个客户端可能同时看到相同旧状态，
 	// 从而破坏 Redis-like NX/XX 语义。
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	old, oldExpiresAt, exists, err := s.getWithExpireAtLocked(key, now)
 	if err != nil {
 		return nil, false, err
@@ -371,7 +478,7 @@ func (s *Store) Set(key string, value []byte, opts SetOptions) ([]byte, bool, er
 	}
 
 	expiresAt := int64(0)
-	if opts.KeepTTL && exists {
+	if opts.KeepTTL && exists && oldExpiresAt > 0 {
 		expiresAt = oldExpiresAt
 	} else if opts.TTL > 0 {
 		expiresAt = now.Add(opts.TTL).UnixMilli()
@@ -386,15 +493,43 @@ func (s *Store) Set(key string, value []byte, opts SetOptions) ([]byte, bool, er
 }
 
 func (s *Store) Get(key string) ([]byte, bool) {
-	value, _, exists, err := s.getWithExpireAt(key, time.Now())
-	if err != nil {
-		s.logger.Warn("rocksdb get failed", "key", key, "error", err)
-		return nil, false
-	}
+	value, exists, _ := s.GetWithError(key)
 	return value, exists
 }
 
+// GetWithError 保留存储错误，让协议层能够区分故障与未命中。
+func (s *Store) GetWithError(key string) ([]byte, bool, error) {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return nil, false, fmt.Errorf("ERR store closed")
+	}
+	value, _, exists, err := s.getWithExpireAt(key, time.Now())
+	return value, exists, err
+}
+
 func (s *Store) MSet(pairs map[string][]byte) error {
+	var bytes int64
+	for key, value := range pairs {
+		if err := validateKeyValue(key, value); err != nil {
+			return err
+		}
+		bytes += int64(len(key) + len(value) + encodedHeaderBytes)
+	}
+	if err := s.writeLimiter.Wait(bytes); err != nil {
+		return err
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return fmt.Errorf("ERR store closed")
+	}
+	keys := make([]string, 0, len(pairs))
+	for key := range pairs {
+		keys = append(keys, key)
+	}
+	unlock := s.lockKeys(keys)
+	defer unlock()
 	for key, value := range pairs {
 		if err := validateKeyValue(key, value); err != nil {
 			return err
@@ -410,9 +545,10 @@ func (s *Store) MSet(pairs map[string][]byte) error {
 	}
 	defer C.rocksdb_writebatch_destroy(batch)
 
+	expiresAt := time.Now().Add(MaxTTL).UnixMilli()
 	for key, value := range pairs {
 		cKey := C.CBytes([]byte(key))
-		encoded := encodeValue(value, 0)
+		encoded := encodeValue(value, expiresAt)
 		cVal := C.CBytes(encoded)
 		C.rocksdb_writebatch_put(batch, (*C.char)(cKey), C.size_t(len(key)), (*C.char)(cVal), C.size_t(len(encoded)))
 		C.free(cKey)
@@ -425,12 +561,25 @@ func (s *Store) MSet(pairs map[string][]byte) error {
 }
 
 func (s *Store) Del(keys ...string) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// 删除保留为磁盘紧张时的恢复通道，不进入新增版本的字节限速。
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return 0, fmt.Errorf("ERR store closed")
+	}
+	unlock := s.lockKeys(keys)
+	defer unlock()
+	batch := C.rocksdb_writebatch_create()
+	defer C.rocksdb_writebatch_destroy(batch)
+	seen := make(map[string]bool, len(keys))
 
 	var removed int64
 	now := time.Now()
 	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		_, _, exists, err := s.getWithExpireAtLocked(key, now)
 		if err != nil {
 			return removed, err
@@ -438,58 +587,111 @@ func (s *Store) Del(keys ...string) (int64, error) {
 		if !exists {
 			continue
 		}
-		if err := s.deleteLocked(key); err != nil {
-			return removed, err
-		}
+		cKey := C.CBytes([]byte(key))
+		C.rocksdb_writebatch_delete(batch, (*C.char)(cKey), C.size_t(len(key)))
+		C.free(cKey)
 		removed++
+	}
+	var cErr *C.char
+	C.rocksdb_write(s.db, s.writeOpts, batch, &cErr)
+	if err := takeRocksError(cErr); err != nil {
+		return 0, err
 	}
 	return removed, nil
 }
 
 func (s *Store) Exists(keys ...string) int64 {
+	count, _ := s.ExistsWithError(keys...)
+	return count
+}
+
+// ExistsWithError 对多 key 读取采用与批量写入一致的锁顺序。
+func (s *Store) ExistsWithError(keys ...string) (int64, error) {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return 0, fmt.Errorf("ERR store closed")
+	}
+	unlock := s.lockKeys(keys)
+	defer unlock()
 	var count int64
 	now := time.Now()
 	for _, key := range keys {
 		_, _, exists, err := s.getWithExpireAt(key, now)
-		if err == nil && exists {
+		if err != nil {
+			return 0, err
+		}
+		if exists {
 			count++
 		}
 	}
-	return count
+	return count, nil
 }
 
 func (s *Store) Expire(key string, ttl time.Duration) (bool, error) {
+	// 原子读取前按最大 value 预留，避免等待预算时持有 key 锁。
+	if ttl > 0 {
+		if err := s.writeLimiter.Wait(int64(len(key) + MaxValueBytes + encodedHeaderBytes)); err != nil {
+			return false, err
+		}
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return false, fmt.Errorf("ERR store closed")
+	}
 	if err := validateTTL(ttl); err != nil {
 		return false, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockKeys([]string{key})
+	defer unlock()
 
 	value, _, exists, err := s.getWithExpireAtLocked(key, time.Now())
 	if err != nil || !exists {
+		return false, err
+	}
+	if ttl == 0 {
+		return true, s.delete(key)
+	}
+	if err := s.ensureDiskWriteAllowed(key, nil); err != nil {
 		return false, err
 	}
 	return true, s.putLocked(key, encodeValue(value, time.Now().Add(ttl).UnixMilli()))
 }
 
 func (s *Store) TTL(key string) (time.Duration, bool, bool) {
+	ttl, exists, hasTTL, _ := s.TTLWithError(key)
+	return ttl, exists, hasTTL
+}
+
+// TTLWithError 不在读路径删除记录，避免旧读取误删新版本。
+func (s *Store) TTLWithError(key string) (time.Duration, bool, bool, error) {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return 0, false, false, fmt.Errorf("ERR store closed")
+	}
 	_, expiresAt, exists, err := s.getWithExpireAt(key, time.Now())
 	if err != nil || !exists {
-		return 0, false, false
+		return 0, false, false, err
 	}
 	if expiresAt == 0 {
-		return 0, true, false
+		return 0, true, false, nil
 	}
 	ttl := time.Until(time.UnixMilli(expiresAt))
 	if ttl <= 0 {
-		_ = s.delete(key)
-		return 0, false, false
+		return 0, false, false, nil
 	}
-	return ttl, true, true
+	return ttl, true, true, nil
 }
 
 func (s *Store) DBSize() int64 {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return 0
+	}
 	// 精确 DBSIZE 需要扫描整个 RocksDB keyspace，并解码每个 value 的 TTL。
 	// 对 100G 缓存服务来说这是不可接受的，因此 RocksDB 构建返回引擎估算值。
 	// INFO 暴露同一个估算值，便于运维把它视为 approximate。
@@ -497,26 +699,7 @@ func (s *Store) DBSize() int64 {
 }
 
 func (s *Store) ensureMSetDiskWriteAllowed(pairs map[string][]byte) error {
-	usage, level := s.currentDiskWatermark()
-	s.logDiskWatermark(level, usage)
-	switch level {
-	case "reject":
-		// reject 模式仍允许覆盖已有 key。
-		// 替换现有缓存 value 不会扩大逻辑 keyspace；拒绝新 key 是为了保护主机磁盘不被打满。
-		now := time.Now()
-		for key := range pairs {
-			_, _, exists, err := s.getWithExpireAt(key, now)
-			if err != nil {
-				return err
-			}
-			if !exists {
-				return fmt.Errorf("ERR disk usage exceeds reject watermark")
-			}
-		}
-	case "slowdown":
-		time.Sleep(5 * time.Millisecond)
-	}
-	return nil
+	return s.ensureDiskWriteAllowed("", nil)
 }
 
 func (s *Store) ensureDiskWriteAllowed(key string, knownExists *bool) error {
@@ -524,21 +707,8 @@ func (s *Store) ensureDiskWriteAllowed(key string, knownExists *bool) error {
 	s.logDiskWatermark(level, usage)
 	switch level {
 	case "reject":
-		// reject 水位线是容量护栏，不是只读开关。
-		// 已有 key 仍可更新，使调用方可以在阻止增长时缩小或刷新热点缓存。
-		exists := false
-		if knownExists != nil {
-			exists = *knownExists
-		} else if key != "" {
-			_, _, ok, err := s.getWithExpireAt(key, time.Now())
-			if err != nil {
-				return err
-			}
-			exists = ok
-		}
-		if !exists {
-			return fmt.Errorf("ERR disk usage exceeds reject watermark")
-		}
+		// 覆盖也会产生 WAL 和新文件，拒绝水位必须阻止所有新增版本。
+		return fmt.Errorf("ERR disk usage exceeds reject watermark or free-space reserve")
 	case "slowdown":
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -546,7 +716,12 @@ func (s *Store) ensureDiskWriteAllowed(key string, knownExists *bool) error {
 }
 
 func (s *Store) currentDiskWatermark() (uint64, string) {
-	usage := s.currentDiskUsageBytes(5 * time.Second)
+	s.diskMu.Lock()
+	usage, free, failed, checked := s.cachedDiskUsageBytes, s.cachedDiskFreeBytes, s.diskSampleFailed, s.diskUsageCheckedAt
+	s.diskMu.Unlock()
+	if failed || time.Since(checked) > 10*time.Second || free <= s.tuning.DiskReserveBytes {
+		return usage, "reject"
+	}
 	switch {
 	case s.tuning.DiskRejectWatermarkBytes > 0 && usage >= s.tuning.DiskRejectWatermarkBytes:
 		return usage, "reject"
@@ -559,31 +734,52 @@ func (s *Store) currentDiskWatermark() (uint64, string) {
 	}
 }
 
-func (s *Store) currentDiskUsageBytes(maxAge time.Duration) uint64 {
-	s.diskMu.Lock()
-	defer s.diskMu.Unlock()
-
-	if maxAge > 0 && !s.diskUsageCheckedAt.IsZero() && time.Since(s.diskUsageCheckedAt) < maxAge {
-		return s.cachedDiskUsageBytes
-	}
-
-	// RocksDB 可能在 XRocksCache 命令路径之外创建和删除 WAL/SST/blob/临时 compaction 文件。
-	// 遍历数据库目录可以得到简单可信的数据源；调用方通过 maxAge 控制采样可接受的陈旧程度。
+// refreshDiskUsage 在后台采样，不把目录遍历延迟传递给每个写请求。
+func (s *Store) refreshDiskUsage() {
 	var total uint64
-	_ = filepath.WalkDir(s.dir, func(_ string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	failed := false
+	var oldestDataMTime time.Time
+	_ = filepath.WalkDir(s.dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			if !os.IsNotExist(err) {
+				failed = true
+			}
+			return nil
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		info, err := entry.Info()
-		if err != nil || info.Size() <= 0 {
+		if err != nil {
+			if !os.IsNotExist(err) {
+				failed = true
+			}
+			return nil
+		}
+		if info.Size() <= 0 {
 			return nil
 		}
 		total += uint64(info.Size())
+		switch filepath.Ext(path) {
+		case ".sst", ".blob":
+			if oldestDataMTime.IsZero() || info.ModTime().Before(oldestDataMTime) {
+				oldestDataMTime = info.ModTime()
+			}
+		}
 		return nil
 	})
+	free := detectDiskFreeBytes(s.dir)
+	s.diskMu.Lock()
+	defer s.diskMu.Unlock()
 	s.cachedDiskUsageBytes = total
+	s.cachedDiskFreeBytes = free
+	s.diskSampleFailed = failed || free == 0
 	s.diskUsageCheckedAt = time.Now()
-	return total
+	if oldestDataMTime.IsZero() {
+		s.oldestSSTAgeSeconds = 0
+	} else {
+		s.oldestSSTAgeSeconds = int64(time.Since(oldestDataMTime) / time.Second)
+	}
 }
 
 func (s *Store) logDiskWatermark(level string, usage uint64) {
@@ -614,8 +810,19 @@ func (s *Store) logDiskWatermark(level string, usage uint64) {
 }
 
 func (s *Store) IncrBy(key string, delta int64) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.writeLimiter.Wait(int64(len(key) + 20 + encodedHeaderBytes)); err != nil {
+		return 0, err
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return 0, fmt.Errorf("ERR store closed")
+	}
+	if err := validateKeyValue(key, nil); err != nil {
+		return 0, err
+	}
+	unlock := s.lockKeys([]string{key})
+	defer unlock()
 
 	old, expiresAt, exists, err := s.getWithExpireAtLocked(key, time.Now())
 	if err != nil {
@@ -628,6 +835,17 @@ func (s *Store) IncrBy(key string, delta int64) (int64, error) {
 			return 0, fmt.Errorf("ERR value is not an integer or out of range")
 		}
 	}
+	if (delta > 0 && current > math.MaxInt64-delta) || (delta < 0 && current < math.MinInt64-delta) {
+		return 0, fmt.Errorf("ERR increment or decrement would overflow")
+	}
+	if err := s.ensureDiskWriteAllowed(key, nil); err != nil {
+		return 0, err
+	}
+	// 过期记录在读路径上表现为不存在；重新创建时不能沿用旧的过期时间，
+	// 否则 INCRBY 虽然返回成功，新值仍会立即被视为过期。
+	if !exists || expiresAt == 0 {
+		expiresAt = time.Now().Add(MaxTTL).UnixMilli()
+	}
 	next := current + delta
 	value := []byte(strconv.FormatInt(next, 10))
 	if err := s.putLocked(key, encodeValue(value, expiresAt)); err != nil {
@@ -637,11 +855,31 @@ func (s *Store) IncrBy(key string, delta int64) (int64, error) {
 }
 
 func (s *Store) Stats() map[string]string {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.db == nil {
+		return map[string]string{}
+	}
 	keys := s.rocksPropertyInt("rocksdb.estimate-num-keys")
 	liveDataSize := s.rocksPropertyInt("rocksdb.estimate-live-data-size")
 	pendingCompaction := s.rocksPropertyInt("rocksdb.estimate-pending-compaction-bytes")
+	s.diskMu.Lock()
+	usage, free, failed, oldestSSTAge := s.cachedDiskUsageBytes, s.cachedDiskFreeBytes, s.diskSampleFailed, s.oldestSSTAgeSeconds
+	s.diskMu.Unlock()
 
 	return map[string]string{
+		"write_rate_bytes_sec":             strconv.FormatInt(s.writeLimiter.bytesPerSecond, 10),
+		"disk_usage_bytes":                 strconv.FormatUint(usage, 10),
+		"disk_free_bytes":                  strconv.FormatUint(free, 10),
+		"disk_reserve_bytes":               strconv.FormatUint(s.tuning.DiskReserveBytes, 10),
+		"disk_sample_failed":               strconv.FormatBool(failed),
+		"rocksdb_oldest_sst_age_sec":       strconv.FormatInt(oldestSSTAge, 10),
+		"rocksdb_background_errors":        strconv.FormatUint(s.rocksPropertyInt("rocksdb.background-errors"), 10),
+		"rocksdb_immutable_memtables":      strconv.FormatUint(s.rocksPropertyInt("rocksdb.num-immutable-mem-table"), 10),
+		"rocksdb_num_running_compactions":  strconv.FormatUint(s.rocksPropertyInt("rocksdb.num-running-compactions"), 10),
+		"rocksdb_num_running_flushes":      strconv.FormatUint(s.rocksPropertyInt("rocksdb.num-running-flushes"), 10),
+		"rocksdb_memtable_bytes":           strconv.FormatUint(s.rocksPropertyInt("rocksdb.cur-size-all-mem-tables"), 10),
+		"rocksdb_l0_files":                 s.rocksPropertyString("rocksdb.num-files-at-level0"),
 		"keys":                             strconv.FormatUint(keys, 10),
 		"expires":                          "0",
 		"expire_buckets":                   "0",
@@ -685,6 +923,9 @@ func (s *Store) getWithExpireAtLocked(key string, now time.Time) ([]byte, int64,
 }
 
 func (s *Store) getWithExpireAt(key string, now time.Time) ([]byte, int64, bool, error) {
+	if err := validateKeyValue(key, nil); err != nil {
+		return nil, 0, false, err
+	}
 	if key == "" {
 		return nil, 0, false, nil
 	}
@@ -709,10 +950,7 @@ func (s *Store) getWithExpireAt(key string, now time.Time) ([]byte, int64, bool,
 		return nil, 0, false, err
 	}
 	if expired {
-		// 过期 key 必须立即不可见。
-		// 这里的 delete 是 best-effort 物理清理；正确性不依赖它，
-		// 因为后续读取仍会把 encoded value 视为已过期，直到 compaction 将其丢弃。
-		_ = s.delete(key)
+		// 读路径只隐藏过期记录；物理回收由 RocksDB 完成，不删除可能已更新的 key。
 		return nil, expiresAt, false, nil
 	}
 	return value, expiresAt, true, nil
@@ -758,6 +996,17 @@ func (s *Store) rocksPropertyInt(name string) uint64 {
 		return 0
 	}
 	return uint64(out)
+}
+
+func (s *Store) rocksPropertyString(name string) string {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	value := C.rocksdb_property_value(s.db, cName)
+	if value == nil {
+		return "unavailable"
+	}
+	defer C.rocksdb_free(unsafe.Pointer(value))
+	return C.GoString(value)
 }
 
 func takeRocksError(cErr *C.char) error {
