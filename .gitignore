@@ -52,11 +52,12 @@
 # Go workspace artifacts
 /data/
 /coverage.out
-/.gocache/
+.gocache/
 
 # XRocksCache benchmark artifacts
 /benchmark/bin/
 /benchmark/results/
+/benchmark/spring-redis/target/
 
 /dist/
 
