@@ -9,7 +9,7 @@ XRocksCache 是轻量级、单机、Redis RESP 兼容的 String K/V 缓存服务
 - 一个进程，一个本地数据目录。
 - 生产存储使用 RocksDB，不自研 segment、SST、blob 文件格式。
 - 只保留 String key/value 与 TTL 行为。
-- key 最大 512KiB，value 最大 1MiB。
+- key 最大 512KiB，value 最大 5MiB。
 - 写入 TTL 最长 15 天；超过 15 天的 TTL 会被拒绝。
 - 过期不可见由读路径保证；物理清理由 RocksDB compaction filter 延迟完成。
 - 不提供集群、复制、namespace 隔离、事务、Lua、Pub/Sub、搜索或复杂数据结构。

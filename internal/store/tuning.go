@@ -183,7 +183,7 @@ func BuildRocksDBTuning(profile ResourceProfile) RocksDBTuning {
 	targetFileSize = clampUint64(targetFileSize, 64*mib, 256*mib)
 
 	// Blob 文件比 SST 文件更大，因为它们承载 value payload；
-	// 在 1MiB value 工作负载下不应过于频繁轮转。
+	// 在 5MiB value 工作负载下不应过于频繁轮转。
 	blobFileSize := clampUint64(targetFileSize*4, 256*mib, 1*gib)
 
 	// compaction 并发保持保守。

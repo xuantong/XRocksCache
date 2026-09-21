@@ -31,7 +31,7 @@ Chinese documentation is available in [baseline-report-template.md](baseline-rep
 | Limit | Required value | Validation |
 | --- | ---: | --- |
 | Maximum key | 512KiB / 524,288 bytes | boundary and boundary + 1 |
-| Maximum value | 1MiB / 1,048,576 bytes | boundary and boundary + 1 |
+| Maximum value | 5MiB / 5,242,880 bytes | boundary and boundary + 1 |
 | Maximum write TTL | 15 days | short TTL, long TTL, `SET EX/PX`, `EXPIRE/PEXPIRE` |
 
 ## Dataset

@@ -152,6 +152,21 @@ func TestTTLUpperBound(t *testing.T) {
 	}
 }
 
+func TestValueAndKeyBoundaries(t *testing.T) {
+	addr := newTestServer(t)
+	key := strings.Repeat("k", 512*1024)
+	value := strings.Repeat("v", 5*1024*1024)
+	if got := runCommand(t, addr, "SET", key, value); got != "+OK\r\n" {
+		t.Fatalf("SET at boundary: %q", got)
+	}
+	if got := runCommand(t, addr, "GET", key); got != fmt.Sprintf("$%d\r\n%s\r\n", len(value), value) {
+		t.Fatal("GET at boundary did not return the original value")
+	}
+	if got := runCommand(t, addr, "SET", key+"k", "v"); !strings.Contains(got, "key exceeds 512KiB") {
+		t.Fatalf("expected unchanged key limit: %q", got)
+	}
+}
+
 func TestValueUpperBound(t *testing.T) {
 	addr := newTestServer(t)
 	conn, err := net.DialTimeout("tcp", addr, time.Second)

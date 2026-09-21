@@ -101,6 +101,14 @@ func TestRocksDBTTLLimit(t *testing.T) {
 
 func TestRocksDBSizeLimits(t *testing.T) {
 	s := newRocksDBTestStore(t)
+	key := string(bytes.Repeat([]byte("k"), store.MaxKeyBytes))
+	value := bytes.Repeat([]byte("v"), 5*1024*1024)
+	if _, _, err := s.Set(key, value, store.SetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := s.GetWithError(key); err != nil || !found || !bytes.Equal(got, value) {
+		t.Fatalf("boundary roundtrip: %v", err)
+	}
 	if _, _, err := s.Set(string(bytes.Repeat([]byte("k"), store.MaxKeyBytes+1)), []byte("v"), store.SetOptions{}); err == nil {
 		t.Fatal("expected key size error")
 	}

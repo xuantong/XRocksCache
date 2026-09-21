@@ -9,7 +9,7 @@ const (
 	// MaxKeyBytes 和 MaxValueBytes 是产品护栏，不是 RocksDB 极限。
 	// 它们避免低成本缓存节点被少数超大请求拖垮，同时仍允许较大的缓存 payload 使用 RocksDB blob files。
 	MaxKeyBytes   = 512 * 1024
-	MaxValueBytes = 1024 * 1024
+	MaxValueBytes = 5 * 1024 * 1024
 
 	// MaxTTL 用于落实约定的缓存合同：SET/EXPIRE 逻辑绝不能让用户 value 存活超过 15 天。
 	MaxTTL = 15 * 24 * time.Hour

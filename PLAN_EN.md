@@ -9,7 +9,7 @@ XRocksCache is a lightweight, single-node, Redis RESP-compatible String K/V cach
 - One process and one local data directory.
 - Production storage uses RocksDB; XRocksCache does not implement its own segment, SST, or blob file format.
 - String key/value operations with TTL semantics only.
-- Maximum key size: 512KiB; maximum value size: 1MiB.
+- Maximum key size: 512KiB; maximum value size: 5MiB.
 - Maximum write TTL: 15 days; longer TTLs are rejected.
 - Expiration visibility is guaranteed by the read path; physical cleanup is delayed to the RocksDB compaction filter.
 - No cluster, replication, namespace isolation, transactions, Lua, Pub/Sub, search, or complex data structures.

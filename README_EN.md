@@ -13,7 +13,7 @@ Chinese documentation is available in [README.md](README.md).
 - Commands: `GET`, `MGET`, `SET`, `MSET`, `DEL`, `EXISTS`, `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`, `INCR`, `DECR`, `INCRBY`, `DECRBY`, `PING`, `AUTH`, `INFO`, `DBSIZE`, `CLIENT`, `COMMAND`
 - Production storage: RocksDB with LZ4, leveled compaction, blob files, blob GC, and a TTL compaction filter
 - The default build depends on RocksDB directly: requires `CGO_ENABLED=1` and a discoverable RocksDB library. The old AOF plus in-memory index has been removed.
-- Limits: key <= 512KiB, value <= 1MiB, write TTL <= 15 days
+- Limits: key <= 512KiB, value <= 5MiB, write TTL <= 15 days
 - Expiration semantics: the read path guarantees expired keys are invisible; the RocksDB compaction filter performs delayed physical cleanup
 - Configuration strategy: the main config keeps business-facing settings, while RocksDB internals are derived automatically from CPU, memory, and data-disk free space
 

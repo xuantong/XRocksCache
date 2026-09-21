@@ -13,7 +13,7 @@ XRocksCache 是一个轻量级、单机、Redis RESP 兼容的 String K/V 缓存
 - 命令：`GET`、`MGET`、`SET`、`MSET`、`DEL`、`EXISTS`、`EXPIRE`、`PEXPIRE`、`TTL`、`PTTL`、`INCR`、`DECR`、`INCRBY`、`DECRBY`、`PING`、`AUTH`、`INFO`、`DBSIZE`、`CLIENT`、`COMMAND`
 - 生产存储：RocksDB，启用 LZ4、leveled compaction、blob files、blob GC、TTL compaction filter
 - 默认构建即直接依赖 RocksDB：需要 `CGO_ENABLED=1` 并能找到 RocksDB 本地库；旧 AOF + 内存索引已删除
-- 约束：key <= 512KiB，value <= 1MiB，写入 TTL <= 15 天
+- 约束：key <= 512KiB，value <= 5MiB，写入 TTL <= 15 天
 - 过期语义：读路径保证过期 key 不可见；RocksDB compaction filter 负责延迟物理清理
 - 配置策略：主配置只保留业务参数，RocksDB 细节由程序根据 CPU、内存和数据盘剩余空间自动计算
 

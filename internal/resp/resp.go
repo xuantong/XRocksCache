@@ -17,7 +17,7 @@ type Reader struct {
 
 // 请求预算同时限制单连接与全部连接，认证之前同样生效。
 const MaxArguments = 1024
-const MaxBulkBytes = 1024 * 1024
+const MaxBulkBytes = 5 * 1024 * 1024
 const MaxRequestBytes = 8 * 1024 * 1024
 const maxBufferedBytes = 64 * 1024 * 1024
 

@@ -4,6 +4,10 @@ The production baseline is fixed to `cloud_essd / PL1`; PL0 is not accepted. 100
 
 ## Cloud build and test
 
+The server key limit remains 512KiB and the value limit is now 5MiB. Java capacity loads generate random 1MiB–5MiB values; 1MiB is only a benchmark minimum, and the server still accepts smaller values. The total request budget remains 8MiB, including for MSET. Rebuild the server after updating source; the load script compiles the Java client. Running tests retain their previous distribution. Label the size change when comparing against the previous 64KiB–1MiB results.
+
+The 35MiB/s byte rate limit does not guarantee 100ms latency for large values: a 5MiB write requires roughly 143ms of rate budget alone. The conservative EXPIRE budget also increases with the maximum value size. Lower rate settings must cover an individual write's budget or the limiter may reject it.
+
 This flow targets Ubuntu 24.04, 4C8G, and an ESSD PL1 data disk. 100GiB is the logical dataset target, not the disk size; WAL, metadata, and compaction temporary space require additional capacity. Use at least a 300GiB PL1 disk mounted at `/data`, never a production data directory.
 
 ```bash

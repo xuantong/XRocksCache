@@ -7,7 +7,7 @@ Chinese documentation: [production-readiness.md](production-readiness.md).
 - The production disk baseline is Alibaba Cloud `cloud_essd / PL1`; PL0 is not accepted. 100GiB applies only to PL1 validation; PL2/PL3 require their own minimum-capacity acceptance.
 
 - All new writes expire within 15 days, with a 15-day default. Increments preserve existing TTLs. Startup does not rewrite legacy records without TTL; rebuild the cache or assign TTLs during upgrade.
-- Requests allow 1024 arguments, 1MiB per argument, and approximately 8MiB total payload; keys remain limited to 512KiB. Connections share a 64MiB request allocation budget including string-copy reservations.
+- Requests allow 1024 arguments, 5MiB per argument, and approximately 8MiB total payload; keys remain limited to 512KiB. Connections share a 64MiB request allocation budget including string-copy reservations.
 - MGET allows 64 keys and 16MiB response payload. The workers setting bounds concurrent command execution (maximum 32). Connection read/write deadlines are 30 seconds.
 - Expired reads do not delete records. Storage faults return errors rather than cache misses. DBSIZE remains an estimate that may include unreclaimed expired records.
 - SIGTERM/SIGINT stop admission and wait for in-flight connections, closing remaining connections after 30 seconds. Uninterruptible storage I/O is still subject to the service manager's stop deadline, set to 40 seconds for systemd.

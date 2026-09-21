@@ -62,7 +62,7 @@ public class CapacityCheck {
                 try (PrintWriter samples = new PrintWriter(new FileWriter(manifest))) {
                     long report = 0;
                     while (total < target) {
-                        int size = 65536 + sizes.nextInt(1048576 - 65536 + 1);
+                        int size = 1048576 + sizes.nextInt(5 * 1048576 - 1048576 + 1);
                         byte[] expected = value(count, size);
                         long deadline = System.nanoTime() + 120_000_000_000L;
                         while (true) {

@@ -365,7 +365,7 @@ func validateKeyValue(key string, value []byte) error {
 		return fmt.Errorf("ERR key exceeds 512KiB")
 	}
 	if len(value) > MaxValueBytes {
-		return fmt.Errorf("ERR value exceeds 1MiB")
+		return fmt.Errorf("ERR value exceeds 5MiB")
 	}
 	return nil
 }

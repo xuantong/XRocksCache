@@ -31,7 +31,7 @@
 | 限制 | 要求值 | 验证方式 |
 | --- | ---: | --- |
 | 最大 key | 512KiB / 524,288 bytes | 边界值与边界 + 1 |
-| 最大 value | 1MiB / 1,048,576 bytes | 边界值与边界 + 1 |
+| 最大 value | 5MiB / 5,242,880 bytes | 边界值与边界 + 1 |
 | 最大写入 TTL | 15 天 | 短 TTL、长 TTL、`SET EX/PX`、`EXPIRE/PEXPIRE` |
 
 ## 数据集
