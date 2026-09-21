@@ -65,6 +65,14 @@ sudo chown "$(id -un):$(id -gn)" /data/xrc-bench
 
 推荐先进行 10GiB 探路，再进行 100GiB 正式测试。阶梯脚本会删除传入目录下的 `rocksdb` 子目录，因此只能使用新建的隔离目录：
 
+如果只跑当前生产基线，不需要复制长命令，直接执行封装入口：
+
+```bash
+bash dev/test-pl1-100g.sh
+```
+
+默认使用 `/data/xrc-bench`、ESSD PL1、声明容量 300GiB、35MiB/s、100GiB 随机数据和 6691 端口。可通过 `XRC_TEST_ROOT`、`XRC_DISK_CAPACITY_GIB`、`XRC_TEST_PORT` 修改。脚本会先检查至少 250GiB 可用空间，启动当前服务端，检查 INFO 中的 35MiB/s 限速，要求 `LOAD_PASS` 和 `VERIFY_PASS`，然后停止服务、保存报告并删除本轮临时数据库。服务未退出或路径安全校验失败时会保留数据并报告失败。
+
 ```bash
 test_dir=$(mktemp -d /data/xrc-bench/sweep.XXXXXX)
 XRC_DISK_TYPE=cloud_essd XRC_DISK_PL=pl1 XRC_DISK_CAPACITY_GIB=300 \

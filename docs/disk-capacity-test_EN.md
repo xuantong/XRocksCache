@@ -67,6 +67,14 @@ Choose the highest rate without `Write stall`, sustained L0 growth, or unaccepta
 
 Run a 10GiB pilot before the 100GiB test. The sweep script deletes the supplied directory's `rocksdb` subdirectory, so use a new isolated directory:
 
+For the current production baseline, use the wrapped entry point instead of copying the long command:
+
+```bash
+bash dev/test-pl1-100g.sh
+```
+
+Defaults are `/data/xrc-bench`, declared ESSD PL1 capacity 300GiB, 35MiB/s, 100GiB of random data, and port 6691. Override with `XRC_TEST_ROOT`, `XRC_DISK_CAPACITY_GIB`, and `XRC_TEST_PORT`. The script requires at least 250GiB free, verifies the 35MiB/s setting through INFO, requires both `LOAD_PASS` and `VERIFY_PASS`, then stops the server, preserves the report, and removes the temporary database. If shutdown or path safety checks fail, it retains the data and reports failure.
+
 ```bash
 test_dir=$(mktemp -d /data/xrc-bench/sweep.XXXXXX)
 XRC_DISK_TYPE=cloud_essd XRC_DISK_PL=pl1 XRC_DISK_CAPACITY_GIB=300 \
