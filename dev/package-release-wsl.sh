@@ -18,7 +18,11 @@ STAGE_DIR="${DIST_DIR}/${PACKAGE_NAME}"
 
 cd "${PROJECT_DIR}"
 
-bash dev/build-rocksdb-wsl.sh
+if [[ "${XRC_BUILD_PLATFORM:-}" == "ubuntu-24.04" ]]; then
+  bash dev/build-ubuntu-24.04.sh
+else
+  bash dev/build-rocksdb-wsl.sh
+fi
 bash dev/test-rocksdb-wsl.sh -race
 bash dev/smoke-rocksdb-wsl.sh
 
