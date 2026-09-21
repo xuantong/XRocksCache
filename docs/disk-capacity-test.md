@@ -73,6 +73,22 @@ bash dev/test-pl1-100g.sh
 
 默认使用 `/data/xrc-bench`、ESSD PL1、声明容量 300GiB、35MiB/s、100GiB 随机数据和 6691 端口。可通过 `XRC_TEST_ROOT`、`XRC_DISK_CAPACITY_GIB`、`XRC_TEST_PORT` 修改。脚本会先检查至少 250GiB 可用空间，启动当前服务端，检查 INFO 中的 35MiB/s 限速，要求 `LOAD_PASS` 和 `VERIFY_PASS`，然后停止服务、保存报告并删除本轮临时数据库。服务未退出或路径安全校验失败时会保留数据并报告失败。
 
+## 实时查看性能
+
+压测命令在第一个 `tmux` 窗格运行。第二个 SSH 会话或窗格执行：
+
+```bash
+bash dev/watch-pl1-100g.sh benchmark/results/pl1-100g-时间戳
+```
+
+如果省略报告目录，脚本会自动选择最新的 `pl1-100g-*` 目录：
+
+```bash
+bash dev/watch-pl1-100g.sh
+```
+
+它每 5 秒显示 `INFO` 中的 memtable、L0、pending compaction、后台错误、磁盘使用和剩余空间，并显示服务 CPU、RSS、进程读写字节及 Java 压测最新进度。`Ctrl+C` 只退出监控，不会停止压测。可用 `XRC_WATCH_INTERVAL=1` 改为每秒刷新。
+
 ```bash
 test_dir=$(mktemp -d /data/xrc-bench/sweep.XXXXXX)
 XRC_DISK_TYPE=cloud_essd XRC_DISK_PL=pl1 XRC_DISK_CAPACITY_GIB=300 \
