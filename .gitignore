@@ -52,10 +52,13 @@
 # Go workspace artifacts
 /data/
 /coverage.out
+/.gocache/
 
 # XRocksCache benchmark artifacts
 /benchmark/bin/
 /benchmark/results/
 
 /dist/
+
+
 

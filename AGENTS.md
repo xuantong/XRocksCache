@@ -8,7 +8,7 @@
 - 默认配置文件为 `xrockscache.conf`，4C8G 基线配置为 `xrockscache-4c8g.conf`。
 - 项目聚焦单机 String K/V 缓存，不提供 Cluster、Replication、Lua、Search、Pub/Sub 或复杂 Redis 数据结构。
 - 生产存储必须使用 RocksDB；旧 AOF + 内存实现已删除，默认构建即直接依赖 RocksDB，不再提供无 RocksDB 库时的编译检查占位实现。
-- key 最大 512KiB，value 最大 1MiB，写入 TTL 最长 15 天。
+- key 最大 512KiB，value 最大 5MiB，写入 TTL 最长 15 天。
 - 优先保证低成本 2C4G / 4C8G 云服务器上的可部署性、可压测性和 100ms 内延迟目标。
 
 ## 构建与测试
